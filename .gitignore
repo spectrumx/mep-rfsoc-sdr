@@ -1,0 +1,14 @@
+# Ignore build files
+*.o
+*.map
+*.hex
+*.dis
+*.bit
+*.hwh
+build/
+
+# Ignore temp and log files
+*.log
+*.jou
+*.swp
+__pycache__/

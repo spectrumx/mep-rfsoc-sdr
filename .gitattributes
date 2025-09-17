@@ -1,0 +1,32 @@
+# Do not modify binary files
+*.png binary
+*.jpg binary
+*.jpe binary
+*.jpeg binary
+*.JPG binary
+*.PNG binary
+*.ttf binary
+*.eot binary
+*.woff binary
+*.inv binary
+*.dxf binary
+*.hdf binary
+*.bat binary
+*.pdm binary
+*.doctree binary
+*.elf binary -crlf
+*.bin binary -crlf
+*.bit binary -crlf
+*.a binary -crlf
+*.bsp binary
+
+# Project files get CRLF line endings
+*.vcxproj text eol=crlf
+*.props text eol=crlf
+*.project text eol=crlf
+*.cproject text eol=crlf
+*.inf text eol=crlf
+
+
+
+
