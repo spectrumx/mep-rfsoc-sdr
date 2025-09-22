@@ -1,7 +1,6 @@
 import os
 import shutil
 from distutils.dir_util import copy_tree
-from pynqutils.setup_utils import build_py, find_version, extend_package, get_platform
 from setuptools import setup, find_packages
 
 module_name = "mep_rfsoc_sdr"
@@ -80,7 +79,7 @@ if __name__ == "__main__":
 
     setup(
         name=module_name,
-        version=find_version('{}/__init__.py'.format(module_name)),
+        version='0.0.1',
         description="MEP RFSoC SDR package for SpectrumX project",
         long_description=long_description,
         long_description_content_type='text/markdown',
@@ -94,11 +93,6 @@ if __name__ == "__main__":
         },
         python_requires=">=3.6.0",
         install_requires=[
-            "pynqutils",
             "pynq>=2.7",
-            "numpy",
-            "matplotlib",
-            "ipython"
-        ],
-        cmdclass={"build_py": build_py}
+        ]
     )

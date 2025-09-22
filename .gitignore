@@ -12,3 +12,6 @@ build/
 *.jou
 *.swp
 __pycache__/
+
+# Ignore vscode files
+*.code-workspace
