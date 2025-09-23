@@ -15,8 +15,10 @@ The SDR overlay provides flexible software-controlled transmit and receive capab
 
 Clone this repository on the RFSoC 4x2. In the root directory of the repository run:
 ```bash
-pip3 install .
+pip3 install . -v
 ```
+
+The bitstream and hardware description files are not included in the repo by default and must be copied from the release page at: https://github.com/spectrumx/mep-rfsoc-sdr/releases
 
 ## Receiving Data
 
