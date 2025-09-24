@@ -15,75 +15,78 @@ try:
 except FileNotFoundError:
     long_description = "MEP RFSoC SDR package for SpectrumX project"
 
-# Create the main package directory at project root
-os.makedirs(f'{module_name}/mep_rfsoc_sdr', exist_ok=True)
-open(f'{module_name}/mep_rfsoc_sdr/__init__.py', 'w').close()
+# Create __init__.py in project root to make it a package
+open('__init__.py', 'w').close()
 
-# Copy bitstream to python package (if available)
+# Prepare data files list - files will be installed directly from their source locations
 data_files = []
-src_dir = os.path.join(repo_board_dir, 'bitstream')
-dst_dir = os.path.join(module_name, 'bitstream')
 
-# Check if bitstream files exist
-bit_files = []
-hwh_files = []
-if os.path.exists(src_dir):
-    bit_files = [f for f in os.listdir(src_dir) if f.endswith('.bit')]
-    hwh_files = [f for f in os.listdir(src_dir) if f.endswith('.hwh')]
+# Create src/bitstream directory and copy bitstream files there
+src_bitstream_dir = os.path.join('src', 'bitstream')
+os.makedirs(src_bitstream_dir, exist_ok=True)
 
-if bit_files and hwh_files:
-    copy_tree(src_dir, dst_dir)
-    data_files.extend(
-        [os.path.join("..", dst_dir, f) for f in os.listdir(dst_dir)])
-    print(f"Bitstream copied from {src_dir} to {dst_dir}")
-    print(f"Found {len(bit_files)} .bit files and {len(hwh_files)} .hwh files")
+# Check if bitstream files exist and copy them to src/bitstream
+bitstream_dir = os.path.join(repo_board_dir, 'bitstream')
+if os.path.exists(bitstream_dir):
+    bit_files = [f for f in os.listdir(bitstream_dir) if f.endswith('.bit')]
+    hwh_files = [f for f in os.listdir(bitstream_dir) if f.endswith('.hwh')]
+    
+    if bit_files and hwh_files:
+        # Copy bitstream files to src/bitstream directory
+        for file in os.listdir(bitstream_dir):
+            src_file = os.path.join(bitstream_dir, file)
+            dst_file = os.path.join(src_bitstream_dir, file)
+            shutil.copy2(src_file, dst_file)
+        print(f"Copied {len(bit_files)} .bit files and {len(hwh_files)} .hwh files to {src_bitstream_dir}")
+    else:
+        print("  Warning: Required bitstream files (.bit and .hwh) not found.")
+        print("  Please download the latest release from:")
+        print("  https://github.com/spectrumx/mep-rfsoc-sdr/releases")
+        print(f"  and extract to {bitstream_dir}")
 else:
-    print("  Warning: Required bitstream files (.bit and .hwh) not found.")
+    print("  Warning: Bitstream directory not found.")
     print("  Please download the latest release from:")
     print("  https://github.com/spectrumx/mep-rfsoc-sdr/releases")
-    print(f"  and extract to {src_dir}")
+    print(f"  and extract to {bitstream_dir}")
     # Create empty directories to avoid errors
-    os.makedirs(src_dir, exist_ok=True)  # Create source directory structure
-    os.makedirs(dst_dir, exist_ok=True)  # Create destination directory
+    os.makedirs(bitstream_dir, exist_ok=True)  # Create source directory structure
 
-# Copy python source files
-src_dir = os.path.join('src', 'python')
-dst_dir = os.path.join(module_name, 'python')
-
-if os.path.exists(src_dir):
-    copy_tree(src_dir, dst_dir)
-    data_files.extend(
-        [os.path.join("..", dst_dir, f) for f in os.listdir(dst_dir)])
-    print("Python source files copied successfully")
+# Add python source files to data_files
+python_dir = os.path.join('src', 'python')
+if os.path.exists(python_dir):
+    for root, dirs, files in os.walk(python_dir):
+        for file in files:
+            data_files.append(os.path.join(root, file))
+    print("Python source files added to package")
 else:
     print("Warning: Python source directory not found")
-    os.makedirs(dst_dir, exist_ok=True)
 
-# Copy bash scripts
-src_dir = os.path.join('src', 'bash')
-dst_dir = os.path.join(module_name, 'bash')
-
-if os.path.exists(src_dir):
-    copy_tree(src_dir, dst_dir)
-    data_files.extend(
-        [os.path.join("..", dst_dir, f) for f in os.listdir(dst_dir)])
-    print("Bash scripts copied successfully")
+# Add bash scripts to data_files
+bash_dir = os.path.join('src', 'bash')
+if os.path.exists(bash_dir):
+    for root, dirs, files in os.walk(bash_dir):
+        for file in files:
+            data_files.append(os.path.join(root, file))
+    print("Bash scripts added to package")
 else:
     print("Warning: Bash scripts directory not found")
-    os.makedirs(dst_dir, exist_ok=True)
 
-# Copy Jupyter notebooks
-src_dir = os.path.join('src', 'notebooks')
-dst_dir = os.path.join(module_name, 'notebooks')
-
-if os.path.exists(src_dir):
-    copy_tree(src_dir, dst_dir)
-    data_files.extend(
-        [os.path.join("..", dst_dir, f) for f in os.listdir(dst_dir)])
-    print("Jupyter notebooks copied successfully")
+# Add Jupyter notebooks to data_files
+notebooks_dir = os.path.join('src', 'notebooks')
+if os.path.exists(notebooks_dir):
+    for root, dirs, files in os.walk(notebooks_dir):
+        for file in files:
+            data_files.append(os.path.join(root, file))
+    print("Jupyter notebooks added to package")
 else:
     print("Warning: Jupyter notebooks directory not found")
-    os.makedirs(dst_dir, exist_ok=True)
+
+# Add bitstream files to data_files
+if os.path.exists(src_bitstream_dir):
+    for root, dirs, files in os.walk(src_bitstream_dir):
+        for file in files:
+            data_files.append(os.path.join(root, file))
+    print("Bitstream files added to package")
 
 setup(
     name=module_name,
@@ -99,6 +102,7 @@ setup(
     package_data={
         "": data_files,
     },
+    include_package_data=True,
     python_requires=">=3.6.0",
     install_requires=[
         "pynq>=2.7",

@@ -7,15 +7,17 @@ import argparse
 import logging
 import termios
 import tty
-import xrfdc
-import xrfclk
 import zmq
-from rfsoc_qsfp_offload.overlay import Overlay
+import pkg_resources
+from sdr_overlay import SDROverlay
 from enum import Enum
+
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+BITFILE_NAME = "sdr_bitstream.bit"
 
 ZMQ_PUB_SOCKET = "tcp://*:60201"
 ZMQ_SUB_SOCKET = "tcp://192.168.20.1:60200"
-LOG_DIR = '/var/log/spectrumx'
+LOG_DIR = os.path.join(os.sep, "var", "log", "spectrumx")
 
 ADC_SAMPLE_FREQUENCY = 1024     # MSps
 ADC_DECIMATION = 16
@@ -49,33 +51,33 @@ def signal_handler(sig, frame):
     logging.info('Exiting RF capture')
     exit_flag = True
 
-def update_adc_nco(freq_mhz, data):
+def get_bitfile_path():
+    """Get the bitfile path using pkg_resources"""
     try:
-        freq_mhz = float(freq_mhz)  # <=== THIS LINE FIXES IT
-        freq_hz = freq_mhz * 1e6
-        data.f_if_hz = freq_hz
-        adc_f_c_hz = -1 * freq_hz
-        adc_f_c_mhz = adc_f_c_hz / 1e6
-        adc_f_s = ADC_SAMPLE_FREQUENCY
-        pll_freq = 491.52  # MHz — assumed static LMX freq
+        # Try to get the bitfile from the installed package
+        bitfile_path = pkg_resources.resource_filename('mep_rfsoc_sdr', f'src/bitstream/{BITFILE_NAME}')
+        if os.path.exists(bitfile_path):
+            return bitfile_path
+    except Exception as e:
+        logging.warning(f"Could not find bitfile in package: {e}")
+    
+    # Fallback to local path for development
+    local_bitfile_path = os.path.join(SCRIPT_DIR, "..", "bitstream", BITFILE_NAME)
+    if os.path.exists(local_bitfile_path):
+        logging.info(f"Using local bitfile: {local_bitfile_path}")
+        return local_bitfile_path
+    
+    raise FileNotFoundError(f"Could not find bitfile {BITFILE_NAME} in package or local directory")
 
-        mixer = {
-            'CoarseMixFreq': xrfdc.COARSE_MIX_BYPASS,
-            'EventSource': xrfdc.EVNT_SRC_TILE,
-            'FineMixerScale': xrfdc.MIXER_SCALE_1P0,
-            'Freq': adc_f_c_mhz,
-            'MixerMode': xrfdc.MIXER_MODE_R2C,
-            'MixerType': xrfdc.MIXER_TYPE_FINE,
-            'PhaseOffset': 0.0
-        }
 
+def update_adc_nco(freq_mhz, data):
+    freq_mhz = float(freq_mhz)  # <=== THIS LINE FIXES IT
+    freq_hz = freq_mhz * 1e6
+    data.f_if_hz = freq_hz
+    
+    try:
         for (tile, block) in [(0,0), (0,1), (2,0), (2,1)]:
-            adc_tile = data.ol.rfdc.adc_tiles[tile]
-            adc_tile.DynamicPLLConfig(1, pll_freq, adc_f_s)
-            adc_tile.blocks[block].NyquistZone = 1
-            adc_tile.blocks[block].MixerSettings = mixer.copy()
-            adc_tile.blocks[block].UpdateEvent(xrfdc.EVENT_MIXER)
-            adc_tile.SetupFIFO(True)
+            data.ol.set_adc_nco(freq_mhz, ADC_SAMPLE_FREQUENCY, tile, block)
 
         set_freq_metadata(freq_hz, data)
         logging.info(f"ADC mixer and metadata updated to {freq_mhz:.2f} MHz")
@@ -191,6 +193,7 @@ def main(args):
     data.f_if_hz = args.freq * 1e6
     data.pps_count = 0
 
+    # Configure ZMQ
     context = zmq.Context()
     sub_socket = context.socket(zmq.SUB)
     sub_socket.connect(ZMQ_SUB_SOCKET)
@@ -200,24 +203,28 @@ def main(args):
     data.pub_socket = context.socket(zmq.PUB)
     data.pub_socket.bind(ZMQ_PUB_SOCKET)
 
+    # Initialize RFSoC Overlay
     logging.info("Initializing RFSoC 10G Overlay")
-    data.ol = Overlay(ignore_version=True)
+    bitfile_path = get_bitfile_path()
+    print(f"Opening Overlay with bitfile: {bitfile_path}")
+    data.ol = SDROverlay(bitfile_name=bitfile_path, ignore_version=True)
+
+    # Wait for overlay to initialize
     time.sleep(5)
 
+    # Set active channels
     data.channels = ALL_CHANNELS
     set_channel_ctrl(Ctrl.RESET, data)
     data.channels = args.channels
 
-    lmx_freq = 491.52
-    if args.internal_clock:
-        xrfclk.set_ref_clks(lmk_freq=245.76, lmx_freq=lmx_freq)
-    else:
-        xrfclk.set_ref_clks(lmk_freq=122.88, lmx_freq=lmx_freq)
+    # Configure clock
+    data.ol.configure_clock("internal" if args.internal_clock else "external")
 
     # Apply initial ADC config
     update_adc_nco(args.freq, data)
     set_sample_rate((ADC_SAMPLE_FREQUENCY * 1e6) / ADC_DECIMATION, data)
 
+    # Start Capture
     if not args.reset:
         if args.internal_clock:
             capture_now(data)
