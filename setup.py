@@ -1,9 +1,11 @@
 import os
 import shutil
+import urllib.request
 from distutils.dir_util import copy_tree
 from setuptools import setup, find_packages
 
 module_name = "mep_rfsoc_sdr"
+version = "0.0.1"
 board = os.environ.get('BOARD', 'RFSoC4x2')  # Default to RFSoC4x2
 repo_board_dir = f'boards/{board}/{module_name.replace("_", "-")}'
 
@@ -18,6 +20,17 @@ except FileNotFoundError:
 # Create __init__.py in project root to make it a package
 open('__init__.py', 'w').close()
 
+def download_file(url, destination):
+    """Download a file from URL to destination"""
+    try:
+        print(f"Downloading {url} to {destination}")
+        urllib.request.urlretrieve(url, destination)
+        print(f"Successfully downloaded {os.path.basename(destination)}")
+        return True
+    except Exception as e:
+        print(f"Failed to download {url}: {e}")
+        return False
+
 # Prepare data files list - files will be installed directly from their source locations
 data_files = []
 
@@ -27,29 +40,46 @@ os.makedirs(src_bitstream_dir, exist_ok=True)
 
 # Check if bitstream files exist and copy them to src/bitstream
 bitstream_dir = os.path.join(repo_board_dir, 'bitstream')
-if os.path.exists(bitstream_dir):
+os.makedirs(bitstream_dir, exist_ok=True)  # Ensure directory exists
+
+bit_files = [f for f in os.listdir(bitstream_dir) if f.endswith('.bit')] if os.path.exists(bitstream_dir) else []
+hwh_files = [f for f in os.listdir(bitstream_dir) if f.endswith('.hwh')] if os.path.exists(bitstream_dir) else []
+
+# Download missing files if needed
+if not bit_files or not hwh_files:
+    print("Required bitstream files not found locally. Attempting to download...")
+    
+    # Download URLs
+    bit_url = f"https://github.com/spectrumx/mep-rfsoc-sdr/releases/download/v{version}/sdr_bitstream.bit"
+    hwh_url = f"https://github.com/spectrumx/mep-rfsoc-sdr/releases/download/v{version}/sdr_bitstream.hwh"
+    
+    bit_dest = os.path.join(bitstream_dir, "sdr_bitstream.bit")
+    hwh_dest = os.path.join(bitstream_dir, "sdr_bitstream.hwh")
+    
+    # Download missing files
+    if not bit_files:
+        if not download_file(bit_url, bit_dest):
+            print("Failed to download bitstream file")
+    if not hwh_files:
+        if not download_file(hwh_url, hwh_dest):
+            print("Failed to download HWH file")
+    
+    # Refresh file lists after download
     bit_files = [f for f in os.listdir(bitstream_dir) if f.endswith('.bit')]
     hwh_files = [f for f in os.listdir(bitstream_dir) if f.endswith('.hwh')]
-    
-    if bit_files and hwh_files:
-        # Copy bitstream files to src/bitstream directory
-        for file in os.listdir(bitstream_dir):
-            src_file = os.path.join(bitstream_dir, file)
-            dst_file = os.path.join(src_bitstream_dir, file)
-            shutil.copy2(src_file, dst_file)
-        print(f"Copied {len(bit_files)} .bit files and {len(hwh_files)} .hwh files to {src_bitstream_dir}")
-    else:
-        print("  Warning: Required bitstream files (.bit and .hwh) not found.")
-        print("  Please download the latest release from:")
-        print("  https://github.com/spectrumx/mep-rfsoc-sdr/releases")
-        print(f"  and extract to {bitstream_dir}")
+
+# Copy bitstream files to src/bitstream directory
+if bit_files and hwh_files:
+    for file in os.listdir(bitstream_dir):
+        src_file = os.path.join(bitstream_dir, file)
+        dst_file = os.path.join(src_bitstream_dir, file)
+        shutil.copy2(src_file, dst_file)
+    print(f"Copied {len(bit_files)} .bit files and {len(hwh_files)} .hwh files to {src_bitstream_dir}")
 else:
-    print("  Warning: Bitstream directory not found.")
-    print("  Please download the latest release from:")
+    print("  Error: Required bitstream files (.bit and .hwh) could not be found or downloaded.")
+    print("  Please manually download from:")
     print("  https://github.com/spectrumx/mep-rfsoc-sdr/releases")
-    print(f"  and extract to {bitstream_dir}")
-    # Create empty directories to avoid errors
-    os.makedirs(bitstream_dir, exist_ok=True)  # Create source directory structure
+    print(f"  and place in {bitstream_dir}")
 
 # Add python source files to data_files
 python_dir = os.path.join('src', 'python')
@@ -90,7 +120,7 @@ if os.path.exists(src_bitstream_dir):
 
 setup(
     name=module_name,
-    version='0.0.1',
+    version=version,
     description="MEP RFSoC SDR package for SpectrumX project",
     long_description=long_description,
     long_description_content_type='text/markdown',
