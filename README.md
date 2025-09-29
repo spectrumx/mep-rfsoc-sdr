@@ -13,7 +13,20 @@ The SDR overlay provides flexible software-controlled transmit and receive capab
 
 ## RFSoC 4x2 Installation Guide
 
-Clone this repository on the RFSoC 4x2. In the root directory of the repository run:
+Clone this repository on the RFSoC 4x2. **Important**: This repository uses Git submodules for external dependencies, so you must initialize them:
+
+```bash
+git clone --recursive https://github.com/spectrumx/mep-rfsoc-sdr.git
+cd mep-rfsoc-sdr
+```
+
+If you already cloned without the `--recursive` flag, initialize the submodules:
+
+```bash
+git submodule update --init --recursive
+```
+
+Then install the package:
 ```bash
 pip3 install . -v
 ```
