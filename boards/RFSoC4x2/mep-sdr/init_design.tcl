@@ -38,4 +38,4 @@ update_ip_catalog
 add_files -fileset constrs_1 -norecurse ${constraints_file}
 
 # Source the block design creation script
-#source ./block_design.tcl
+source ./block_design.tcl

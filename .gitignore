@@ -1,4 +1,5 @@
 # Ignore build files
+*.str
 *.o
 *.map
 *.hex
