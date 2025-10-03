@@ -20,12 +20,6 @@ git clone --recursive https://github.com/spectrumx/mep-rfsoc-sdr.git
 cd mep-rfsoc-sdr
 ```
 
-If you already cloned without the `--recursive` flag, initialize the submodules:
-
-```bash
-git submodule update --init --recursive
-```
-
 Then install the package:
 ```bash
 pip3 install . -v
@@ -36,3 +30,26 @@ The bitstream and hardware description files are not included in the repo by def
 ## Receiving Data
 
 The SDR image streams captured RF data over a UDP connection. I/Q data is sent in interleaved packets with a header providing timing and frequency information. This data stream can be received and parsed by utilties in the [mep-examples](https://github.com/spectrumx/mep-examples) repository. 
+
+## Vivado build guide
+
+The build scripts expect Vivado 2024.1 and a license for the XXV_Ethernet core. Source the Vivado environment script, the path will depend on the installation:
+
+```bash
+source /opt/Xilinx/Vivado/2024.1/settings64.sh
+```
+
+Initialize the Vivado project:
+
+```bash
+cd boards/RFSoC4x2/mep-sdr
+init_design.bash
+```
+
+That will create the Vivado project and instantiate the block design. To build the project open the design in Vivado:
+
+```bash
+vivado mep-sdr/mep-sdr.xdc
+```
+
+In Vivado go to Tools->Run Tcl Script and select build_design.tcl. This script will synthesize, place, and route the design. 
