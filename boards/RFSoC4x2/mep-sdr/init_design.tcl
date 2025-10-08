@@ -21,7 +21,7 @@ if {[file exists $board_dir]} {
 # Create the Vivado project
 # - Project name: mep-sdr
 # - Target part: xczu48dr-ffvg1517-2-e (RFSoC4x2)
-create_project ${project_name} ./${project_name} -part xczu48dr-ffvg1517-2-e
+create_project ${project_name} . -part xczu48dr-ffvg1517-2-e
 
 # Configure project properties
 # Set the board part (now that repository path is set)

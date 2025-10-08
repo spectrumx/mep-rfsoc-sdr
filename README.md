@@ -39,17 +39,14 @@ The build scripts expect Vivado 2024.1 and a license for the XXV_Ethernet core. 
 source /opt/Xilinx/Vivado/2024.1/settings64.sh
 ```
 
-Initialize the Vivado project:
+Initialize and build the Vivado project:
 
 ```bash
 cd boards/RFSoC4x2/mep-sdr
-init_design.bash
+init_design.bash --build
 ```
-
-That will create the Vivado project and instantiate the block design. To build the project open the design in Vivado:
+To only initialize the project, run init_design.bash without the build flag. This will create the Vivado project and instantiate the block design. The block design can then be manually opened in Vivado. 
 
 ```bash
-vivado mep-sdr/mep-sdr.xdc
+vivado mep-sdr.xdc
 ```
-
-In Vivado go to Tools->Run Tcl Script and select build_design.tcl. This script will synthesize, place, and route the design. 

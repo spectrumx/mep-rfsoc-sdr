@@ -6,7 +6,20 @@
 *.dis
 *.bit
 *.hwh
-build/
+
+# Vivado project-generated files and folders
+boards/**/mep-sdr.cache/
+boards/**/mep-sdr.hw/
+boards/**/mep-sdr.ip_user_files/
+boards/**/mep-sdr.gen/
+boards/**/mep-sdr.runs/
+boards/**/mep-sdr.srcs/
+boards/**/mep-sdr.xpr
+boards/**/.Xil/
+boards/**/.ipcache/
+boards/**/.sim/
+boards/**/project_*/        # auto-created scratch projects
+boards/**/tmp*/             # scratch temp dirs
 
 # Ignore temp and log files
 *.log
