@@ -18,8 +18,10 @@ boards/**/mep-sdr.xpr
 boards/**/.Xil/
 boards/**/.ipcache/
 boards/**/.sim/
+boards/**/sim_temp/
 boards/**/project_*/        # auto-created scratch projects
 boards/**/tmp*/             # scratch temp dirs
+boards/**/mep-sdr.tmp/
 
 # Ignore temp and log files
 *.log
