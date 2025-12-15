@@ -883,9 +883,25 @@ module adc_to_udp_stream_v1_0 #
     assign s00_axi_awready = 1'b1;
     assign s00_axi_wready = 1'b1;
     assign s00_axi_bresp = 2'b00;
-    assign s00_axi_bvalid = s00_axi_wvalid;
     assign s00_axi_arready = 1'b1;
     assign s00_axi_rresp = 2'b00;
+    
+    // Write response valid signal
+    reg bvalid_reg;
+    always @(posedge s00_axi_aclk) begin
+        if (!s00_axi_aresetn) begin
+            bvalid_reg <= 1'b0;
+        end else begin
+            // Assert bvalid when both write address and write data are accepted
+            if (s00_axi_awvalid && s00_axi_awready && s00_axi_wvalid && s00_axi_wready && !bvalid_reg) begin
+                bvalid_reg <= 1'b1;
+            end else if (s00_axi_bvalid && s00_axi_bready) begin
+                bvalid_reg <= 1'b0;
+            end
+        end
+    end
+    
+    assign s00_axi_bvalid = bvalid_reg;
 
     wire pps_detect_s00;
     signal_clock_sync pps_detect_sync (
@@ -1001,7 +1017,7 @@ module adc_to_udp_stream_v1_0 #
     always @(posedge s00_axi_aclk) begin
         if (~s00_axi_aresetn) begin
             s00_axi_rdata <= 32'b0;
-        end else if (s00_axi_arvalid && !s00_axi_rvalid) begin
+        end else if (s00_axi_arvalid && s00_axi_arready) begin
             case (s00_axi_araddr)
                 32'h0000_0000: s00_axi_rdata = {30'h0, enable_next_pps_s00, user_reset_s00}; 
                 32'h0000_0004: s00_axi_rdata = frequency_idx;
@@ -1046,7 +1062,12 @@ module adc_to_udp_stream_v1_0 #
         if (~s00_axi_aresetn) begin
             rvalid_reg <= 1'b0;
         end else begin
-            rvalid_reg <= s00_axi_arvalid && !rvalid_reg && s00_axi_rready;
+            // Assert rvalid when read address is accepted, clear when read data is accepted
+            if (rvalid_reg && s00_axi_rready) begin
+                rvalid_reg <= 1'b0;
+            end else if (s00_axi_arvalid && s00_axi_arready) begin
+                rvalid_reg <= 1'b1;
+            end
         end
     end
 

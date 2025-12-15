@@ -16,8 +16,8 @@ module function_gen_to_dac_1_0 #
     parameter integer C_S00_AXI_ADDR_WIDTH    = 7,
 
     // Parameters of Output AXIS Master Bus Interface M00_AXIS
-    parameter integer C_M00_AXIS_TDATA_WIDTH  = 256,
-    parameter integer C_M00_AXIS_TKEEP_WIDTH  = 32
+    parameter integer C_M00_AXIS_TDATA_WIDTH  = 160,  // 10 samples × 16 bits = 160 bits (5 I/Q pairs)
+    parameter integer C_M00_AXIS_TKEEP_WIDTH  = 20   // 160 bits / 8 = 20 bytes
 )
 (
     // Ports of Axi Slave Bus Interface S00_AXI
@@ -57,6 +57,8 @@ module function_gen_to_dac_1_0 #
     // Local parameters
     localparam integer WAVEFORM_TYPES = 4;
     localparam integer MAX_FREQUENCY = 100000000; // 100 MHz max
+    localparam integer CLOCK_FREQUENCY = 156250000; // 156.25 MHz
+    localparam integer SAMPLES_PER_PACKET = 10; // 10 samples × 16 bits = 160 bits
     
     // Function generator control registers
     reg [31:0] waveform_type_ctrl;
@@ -66,10 +68,21 @@ module function_gen_to_dac_1_0 #
     reg [31:0] offset_ctrl;
     reg [31:0] enable_ctrl;
     
-    // Internal signals
-    wire [31:0] current_sample;
-    wire [31:0] sample_counter;
-    wire [31:0] phase_accumulator;
+    // Waveform generator signals
+    wire [13:0] waveform_sine_out;
+    wire [13:0] waveform_cosine_out;
+    wire waveform_valid_out;
+
+    // Amplitude-scaled versions of waveform outputs.
+    // amplitude_ctrl encodes the number of right shifts:
+    // 0 = original signal, 1 = signal/2, 2 = signal/4, etc.
+    wire [15:0] scaled_sine;
+    wire [15:0] scaled_cosine;
+    
+    // Sample buffer for packing into AXI4-Stream
+    reg [15:0] sample_buffer [0:SAMPLES_PER_PACKET-1];
+    reg [3:0] sample_count;
+    reg buffer_ready;
     
     // AXI4-Stream output
     reg [C_M00_AXIS_TDATA_WIDTH-1:0] output_data;
@@ -77,8 +90,21 @@ module function_gen_to_dac_1_0 #
     reg output_valid;
     reg output_last;
     
-    // Waveform generation logic
-    // TODO: Implement waveform generation logic
+    // Instantiate waveform generator
+    lut_waveform_gen #(
+        .CLOCK_FREQUENCY(CLOCK_FREQUENCY),
+        .PHASE_WIDTH(32),
+        .DATA_WIDTH(14),
+        .LUT_ADDR_WIDTH(12)
+    ) u_waveform_gen (
+        .clk(m00_axis_aclk),
+        .rst_n(m00_axis_aresetn),
+        .frequency(frequency_ctrl),
+        .phase_offset(phase_ctrl),
+        .sine_out(waveform_sine_out),
+        .cosine_out(waveform_cosine_out),
+        .valid_out(waveform_valid_out)
+    );
     
     // AXI4-Stream output
     assign m00_axis_tvalid = output_valid;
@@ -168,14 +194,49 @@ module function_gen_to_dac_1_0 #
     
     assign s00_axi_rvalid = rvalid_reg;
     
-    // TODO: Implement waveform generation logic here
-    // This would include:
-    // - Sinewave generation using lookup table or CORDIC
-    // - Square wave generation with configurable duty cycle
-    // - Triangle wave generation with linear ramp
-    // - DAC output formatting to match M00_AXIS data width
-    // - Phase accumulator for frequency control
-    // - Amplitude scaling and offset adjustment
-    // - Enable control for waveform output
+    // Amplitude scaling logic
+    assign scaled_sine   = ({2'b00, waveform_sine_out}   >> amplitude_ctrl[3:0]);
+    assign scaled_cosine = ({2'b00, waveform_cosine_out} >> amplitude_ctrl[3:0]);
+
+    // Sample buffer and AXI4-Stream packing logic
+    always @(posedge m00_axis_aclk or negedge m00_axis_aresetn) begin
+        if (!m00_axis_aresetn) begin
+            sample_count <= 4'h0;
+            buffer_ready <= 1'b0;
+            output_valid <= 1'b0;
+            output_last <= 1'b0;
+            output_keep <= {C_M00_AXIS_TKEEP_WIDTH{1'b1}}; // All bytes valid
+        end else begin
+            // Pack buffer into output_data when ready and clear buffer_ready
+            if (buffer_ready) begin
+                output_data <= {
+                    sample_buffer[9], sample_buffer[8], sample_buffer[7], sample_buffer[6], sample_buffer[5],
+                    sample_buffer[4], sample_buffer[3], sample_buffer[2], sample_buffer[1], sample_buffer[0]
+                };
+                output_valid <= 1'b1;
+                output_last <= 1'b1;
+                buffer_ready <= 1'b0;
+            end else if (m00_axis_tready && output_valid) begin
+                // Clear valid when data is accepted
+                output_valid <= 1'b0;
+                output_last <= 1'b0;
+            end
+            
+            // Collect samples when enabled and valid (and not already ready)
+            if (enable_ctrl[0] && waveform_valid_out && !buffer_ready && !output_valid) begin
+                // Pack (optionally amplitude-scaled) sine and cosine into 16-bit values
+                sample_buffer[sample_count] <= scaled_sine;
+                sample_buffer[sample_count + 1] <= scaled_cosine;
+                
+                if (sample_count == (SAMPLES_PER_PACKET - 2)) begin
+                    // Buffer is full after storing these two samples
+                    sample_count <= 4'h0;
+                    buffer_ready <= 1'b1;
+                end else begin
+                    sample_count <= sample_count + 2;
+                end
+            end
+        end
+    end
     
 endmodule

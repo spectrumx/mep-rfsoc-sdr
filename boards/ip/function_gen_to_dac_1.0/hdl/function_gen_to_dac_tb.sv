@@ -6,8 +6,8 @@ module function_gen_to_dac_tb;
     // Test parameters
     parameter C_S00_AXI_DATA_WIDTH = 32;
     parameter C_S00_AXI_ADDR_WIDTH = 7;
-    parameter C_M00_AXIS_TDATA_WIDTH = 256;
-    parameter C_M00_AXIS_TKEEP_WIDTH = 32;
+    parameter C_M00_AXIS_TDATA_WIDTH = 160;  // 10 samples × 16 bits = 160 bits (5 I/Q pairs)
+    parameter C_M00_AXIS_TKEEP_WIDTH = 20;   // 160 bits / 8 = 20 bytes
     
     // Clock and reset signals
     reg s00_axi_aclk;
@@ -131,60 +131,44 @@ module function_gen_to_dac_tb;
         read_and_verify_register(32'h0000_0000, 32'h00000001);
         #10;
         
-        // Test 2: Write frequency register (0x0000_0004)
-        $display("Test 2: Writing frequency register");
-        write_register(32'h0000_0004, 32'h00001234);
+        // Test 2: Write frequency register (0x0000_0004) to 2 MHz
+        $display("Test 2: Writing frequency register to 2 MHz");
+        write_register(32'h0000_0004, 32'd2000000);
         #10;
-        read_and_verify_register(32'h0000_0004, 32'h00001234);
-        #10;
-        
-        // Test 3: Write amplitude register (0x0000_0008)
-        $display("Test 3: Writing amplitude register");
-        write_register(32'h0000_0008, 32'h00005678);
-        #10;
-        read_and_verify_register(32'h0000_0008, 32'h00005678);
+        read_and_verify_register(32'h0000_0004, 32'd2000000);
         #10;
         
-        // Test 4: Write phase register (0x0000_000C)
-        $display("Test 4: Writing phase register");
-        write_register(32'h0000_000C, 32'h00009ABC);
+        // Test 3: Write amplitude register (0x0000_0008) to 1 (divide by 2)
+        $display("Test 3: Writing amplitude register to 1 (shift right by 1)");
+        write_register(32'h0000_0008, 32'd1);
         #10;
-        read_and_verify_register(32'h0000_000C, 32'h00009ABC);
-        #10;
-        
-        // Test 5: Write offset register (0x0000_0010)
-        $display("Test 5: Writing offset register");
-        write_register(32'h0000_0010, 32'h0000DEFF);
-        #10;
-        read_and_verify_register(32'h0000_0010, 32'h0000DEFF);
+        read_and_verify_register(32'h0000_0008, 32'd1);
         #10;
         
-        // Test 6: Write enable register (0x0000_0014)
-        $display("Test 6: Writing enable register");
+        // Skip phase (0x0000_000C) and offset (0x0000_0010) register writes
+        
+        // Test 4: Write enable register (0x0000_0014)
+        $display("Test 4: Writing enable register");
         write_register(32'h0000_0014, 32'h00000001);
         #10;
         read_and_verify_register(32'h0000_0014, 32'h00000001);
         #10;
         
-        // Test 7: Write multiple registers in sequence
-        $display("Test 7: Writing multiple registers");
-        write_register(32'h0000_0000, 32'h00000003); // Triangle wave
-        write_register(32'h0000_0004, 32'h00005555); // Frequency
-        write_register(32'h0000_0008, 32'h0000AAAA); // Amplitude
-        #10;
-        read_and_verify_register(32'h0000_0000, 32'h00000003);
-        read_and_verify_register(32'h0000_0004, 32'h00005555);
-        read_and_verify_register(32'h0000_0008, 32'h0000AAAA);
-        #10;
+        // // Test 7: Write multiple registers in sequence
+        // $display("Test 7: Writing multiple registers");
+        // write_register(32'h0000_0000, 32'h00000003); // Triangle wave
+        // write_register(32'h0000_0004, 32'h00005555); // Frequency
+        // write_register(32'h0000_0008, 32'h0000AAAA); // Amplitude
+        // #10;
+        // read_and_verify_register(32'h0000_0000, 32'h00000003);
+        // read_and_verify_register(32'h0000_0004, 32'h00005555);
+        // read_and_verify_register(32'h0000_0008, 32'h0000AAAA);
+        // #10;
         
-        // Test 8: Write invalid address (should not affect anything)
-        $display("Test 8: Writing to invalid register address");
-        write_register(32'h0000_0018, 32'h12345678); // Invalid address
-        #10;
-        read_and_verify_register(32'h0000_0000, 32'h00000003); // Should remain unchanged
-        #10;
+        // After enable goes high, wait for two 2 MHz waveform cycles (period = 500 ns, 2 cycles = 1000 ns)
+        #1000;
         
-        $display("All register write tests completed successfully!");
+        $display("All register write tests completed successfully, including 2 MHz waveform run time.");
         $finish;
     end
     

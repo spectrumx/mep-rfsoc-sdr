@@ -1,14 +1,22 @@
 ###############################################################################
-# Simulation Setup Script for function_gen_to_dac IP Testbench
+# Simulation Setup Script for waveform generator IP Testbench
 # 
-# This script sets up and launches a behavioral simulation for the 
-# function_gen_to_dac_tb testbench.
+# This script sets up and launches a behavioral simulation for either
+# cordic_waveform_gen_tb or lut_waveform_gen_tb testbench.
 #
 # Usage:
-#   - From Vivado Tcl console with IP in catalog: source simulate_function_gen_to_dac.tcl
-#   - From Vivado Tcl console with direct path: source simulate_function_gen_to_dac.tcl
-#   - From command line: vivado -mode batch -source simulate_function_gen_to_dac.tcl
+#   - From Vivado Tcl console: source simulate_waveform_gen.tcl
+#   - From command line: vivado -mode batch -source simulate_waveform_gen.tcl
+#
+# Configuration:
+#   - Set the waveform_type variable below to "cordic" or "lut"
 ###############################################################################
+
+# Configuration: Select waveform generator type
+# Options: "cordic" or "lut"
+set waveform_type "lut"
+
+puts "Selected waveform generator type: $waveform_type"
 
 # Get the IP directory path
 set ip_dir [file dirname [info script]]
@@ -22,16 +30,24 @@ if {[current_project -quiet] == ""} {
     puts "Created temporary project for simulation"
 }
 
-# Add HDL files to sources_1 fileset
-set hdl_files [list \
-    [file join $hdl_dir lut_waveform_gen.v] \
-    [file join $hdl_dir function_gen_to_dac_v1.0.v] \
-]
+# Add HDL files to sources_1 fileset based on selected type
+if {$waveform_type == "cordic"} {
+    set hdl_files [list \
+        [file join $hdl_dir cordic_waveform_gen.v] \
+    ]
+    set testbench_file [file join $hdl_dir cordic_waveform_gen_tb.sv]
+    set top_module "cordic_waveform_gen_tb"
+    set wcfg_name "cordic_waveform_gen_tb"
+} else {
+    set hdl_files [list \
+        [file join $hdl_dir lut_waveform_gen.v] \
+    ]
+    set testbench_file [file join $hdl_dir lut_waveform_gen_tb.sv]
+    set top_module "lut_waveform_gen_tb"
+    set wcfg_name "lut_waveform_gen_tb"
+}
 
 add_files -fileset sources_1 -norecurse $hdl_files
-
-# Add testbench to simulation fileset
-set testbench_file [file join $hdl_dir function_gen_to_dac_tb.sv]
 
 # Create or get sim_1 fileset
 if {[get_filesets sim_1 -quiet] == ""} {
@@ -43,11 +59,11 @@ set_property SOURCE_SET sources_1 [get_filesets sim_1]
 add_files -fileset sim_1 -norecurse $testbench_file
 
 # Set testbench as top module
-set_property top function_gen_to_dac_tb [get_filesets sim_1]
+set_property top $top_module [get_filesets sim_1]
 set_property top_lib {} [get_filesets sim_1]
 
 # Add wave configuration file to simulation fileset if it exists
-set wcfg_file [file join $ip_dir sim function_gen_to_dac_tb_behav.wcfg]
+set wcfg_file [file join $ip_dir sim ${wcfg_name}_behav.wcfg]
 if {[file exists $wcfg_file]} {
     puts "Adding waveform configuration to project: $wcfg_file"
     add_files -fileset sim_1 -norecurse $wcfg_file
@@ -73,10 +89,11 @@ if {[file exists $wcfg_file]} {
 }
 
 # Run simulation with a time limit (safety timeout)
-# Testbench should complete in < 5us, using 20us as a safe limit
-puts "Running simulation (timeout: 20us)..."
-run 20us
+# Testbench should complete in 1000ns, using 5us as a safe limit
+puts "Running simulation (timeout: 5us)..."
+run 5us
 
 # Wait a moment for log to be written
 after 500
+
 

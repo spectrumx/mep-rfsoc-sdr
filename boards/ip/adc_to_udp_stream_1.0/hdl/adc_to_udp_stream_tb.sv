@@ -119,7 +119,7 @@ module adc_to_udp_stream_v1_0_tb;
         .m00_axis_tlast(m00_axis_tlast),
         .m00_axis_tready(m00_axis_tready),
 
-        .adc_clk(adc_clk),
+        //.adc_clk(adc_clk),
         .pps_comp(pps_comp)
     );
 
@@ -197,11 +197,13 @@ module adc_to_udp_stream_v1_0_tb;
 
         // Wait for WREADY
         @(posedge s00_axi_aclk);
-        while (!s00_axi_awready) @(posedge s00_axi_aclk); // Wait until ready
+        while (!s00_axi_wready) @(posedge s00_axi_aclk); // Wait until ready
+        @(posedge s00_axi_aclk);
         s00_axi_wvalid = 1'b0;
         s00_axi_awvalid = 1'b0;
 
         // Wait for BVALID and respond
+        // bvalid is asserted on the clock edge after both awready and wready are asserted
         @(posedge s00_axi_aclk);
         while (!s00_axi_bvalid) @(posedge s00_axi_aclk);
         s00_axi_bready = 1'b1;
@@ -227,11 +229,13 @@ module adc_to_udp_stream_v1_0_tb;
 
         // Wait for WREADY
         @(posedge s00_axi_aclk);
-        while (!s00_axi_awready) @(posedge s00_axi_aclk); // Wait until ready
+        while (!s00_axi_wready) @(posedge s00_axi_aclk); // Wait until ready
+        @(posedge s00_axi_aclk);
         s00_axi_wvalid = 1'b0;
         s00_axi_awvalid = 1'b0;
 
         // Wait for BVALID and respond
+        // bvalid is asserted on the clock edge after both awready and wready are asserted
         @(posedge s00_axi_aclk);
         while (!s00_axi_bvalid) @(posedge s00_axi_aclk);
         s00_axi_bready = 1'b1;
@@ -257,7 +261,8 @@ module adc_to_udp_stream_v1_0_tb;
 
         // Wait for WREADY
         @(posedge s00_axi_aclk);
-        while (!s00_axi_awready) @(posedge s00_axi_aclk); // Wait until ready
+        while (!s00_axi_wready) @(posedge s00_axi_aclk); // Wait until ready
+        @(posedge s00_axi_aclk);
         s00_axi_wvalid = 1'b0;
         s00_axi_awvalid = 1'b0;
 

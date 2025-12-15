@@ -11,15 +11,15 @@
       </db_ref>
    </db_ref_list>
    <zoom_setting>
-      <ZoomStartTime time="134.450 ns"></ZoomStartTime>
-      <ZoomEndTime time="146.381 ns"></ZoomEndTime>
-      <Cursor1Time time="144.000 ns"></Cursor1Time>
+      <ZoomStartTime time="0.000 ns"></ZoomStartTime>
+      <ZoomEndTime time="2,018.001 ns"></ZoomEndTime>
+      <Cursor1Time time="5.752 ns"></Cursor1Time>
    </zoom_setting>
    <column_width_setting>
       <NameColumnWidth column_width="276"></NameColumnWidth>
-      <ValueColumnWidth column_width="100"></ValueColumnWidth>
+      <ValueColumnWidth column_width="96"></ValueColumnWidth>
    </column_width_setting>
-   <WVObjectSize size="40" />
+   <WVObjectSize size="43" />
    <wvobject type="logic" fp_name="/function_gen_to_dac_tb/s00_axi_aclk">
       <obj_property name="ElementShortName">s00_axi_aclk</obj_property>
       <obj_property name="ObjectShortName">s00_axi_aclk</obj_property>
@@ -121,12 +121,12 @@
       <obj_property name="ObjectShortName">m00_axis_tvalid</obj_property>
    </wvobject>
    <wvobject type="array" fp_name="/function_gen_to_dac_tb/m00_axis_tdata">
-      <obj_property name="ElementShortName">m00_axis_tdata[255:0]</obj_property>
-      <obj_property name="ObjectShortName">m00_axis_tdata[255:0]</obj_property>
+      <obj_property name="ElementShortName">m00_axis_tdata[159:0]</obj_property>
+      <obj_property name="ObjectShortName">m00_axis_tdata[159:0]</obj_property>
    </wvobject>
    <wvobject type="array" fp_name="/function_gen_to_dac_tb/m00_axis_tkeep">
-      <obj_property name="ElementShortName">m00_axis_tkeep[31:0]</obj_property>
-      <obj_property name="ObjectShortName">m00_axis_tkeep[31:0]</obj_property>
+      <obj_property name="ElementShortName">m00_axis_tkeep[19:0]</obj_property>
+      <obj_property name="ObjectShortName">m00_axis_tkeep[19:0]</obj_property>
    </wvobject>
    <wvobject type="logic" fp_name="/function_gen_to_dac_tb/m00_axis_tuser">
       <obj_property name="ElementShortName">m00_axis_tuser</obj_property>
@@ -179,5 +179,17 @@
    <wvobject type="array" fp_name="/function_gen_to_dac_tb/uut/enable_ctrl">
       <obj_property name="ElementShortName">enable_ctrl[31:0]</obj_property>
       <obj_property name="ObjectShortName">enable_ctrl[31:0]</obj_property>
+   </wvobject>
+   <wvobject type="array" fp_name="/function_gen_to_dac_tb/uut/output_data">
+      <obj_property name="ElementShortName">output_data[159:0]</obj_property>
+      <obj_property name="ObjectShortName">output_data[159:0]</obj_property>
+   </wvobject>
+   <wvobject type="array" fp_name="/function_gen_to_dac_tb/uut/waveform_sine_out">
+      <obj_property name="ElementShortName">waveform_sine_out[13:0]</obj_property>
+      <obj_property name="ObjectShortName">waveform_sine_out[13:0]</obj_property>
+   </wvobject>
+   <wvobject type="array" fp_name="/function_gen_to_dac_tb/uut/waveform_cosine_out">
+      <obj_property name="ElementShortName">waveform_cosine_out[13:0]</obj_property>
+      <obj_property name="ObjectShortName">waveform_cosine_out[13:0]</obj_property>
    </wvobject>
 </wave_config>
