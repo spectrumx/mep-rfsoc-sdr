@@ -156,6 +156,7 @@ if { $bCheckIPs == 1 } {
    # - xlconcat: Utility concatenation logic
    # - xxv_ethernet: 10GbE Ethernet MAC
    # - zynq_ultra_ps_e: Zynq UltraScale+ Processing System
+   # - function_gen_to_dac: Custom IP for function generator to DAC
    set list_check_ips "\ 
 user.org:user:adc_to_udp_stream:*\
 xilinx.com:ip:axi_dma:*\
@@ -174,6 +175,7 @@ xilinx.com:ip:util_vector_logic:*\
 xilinx.com:ip:xlconcat:*\
 xilinx.com:ip:xxv_ethernet:*\
 xilinx.com:ip:zynq_ultra_ps_e:*\
+user.org:user:function_gen_to_dac:*\
 "
 
    set list_ips_missing ""
@@ -520,10 +522,10 @@ proc create_root_design { parentCell } {
   set proc_sys_reset_0 [ create_bd_cell -type ip -vlnv xilinx.com:ip:proc_sys_reset:* proc_sys_reset_0 ]
 
   # AXI Interconnect - Connects PS to peripheral IPs
-  # Provides 6 master interfaces for different peripherals
+  # Provides 7 master interfaces for different peripherals
   set ps8_0_axi_periph [ create_bd_cell -type ip -vlnv xilinx.com:ip:axi_interconnect:* ps8_0_axi_periph ]
   set_property -dict [ list \
-   CONFIG.NUM_MI {6} \
+   CONFIG.NUM_MI {7} \
  ] $ps8_0_axi_periph
 
   # QSFP Module Selection - Controls QSFP module selection
@@ -670,6 +672,18 @@ proc create_root_design { parentCell } {
   set_property -dict [ list \
    CONFIG.C_BUF_TYPE {BUFG} \
  ] $util_ds_buf_0
+
+  ##################################################################
+  # FUNCTION GENERATOR TO DAC IP INSTANCE
+  # Custom IP for generating waveforms and outputting to DAC
+  ##################################################################
+  
+  # Function Generator to DAC - Generates waveforms and outputs to DAC via AXI4-Stream
+  set function_gen_to_dac_0 [ create_bd_cell -type ip -vlnv user.org:user:function_gen_to_dac:* function_gen_to_dac_0 ]
+
+  # DAC Clock Domain Reset Controller
+  # Reset controller for the DAC clock domain (153.6 MHz)
+  set proc_sys_reset_1 [ create_bd_cell -type ip -vlnv xilinx.com:ip:proc_sys_reset:* proc_sys_reset_1 ]
 
 
 
@@ -2184,6 +2198,8 @@ Port;FD4A0000;FD4AFFFF;0|FPD;DPDMA;FD4C0000;FD4CFFFF;0|FPD;DDR_XMPU5_CFG;FD05000
   connect_bd_intf_net -intf_net ps8_0_axi_periph_M03_AXI [get_bd_intf_pins ps8_0_axi_periph/M03_AXI] [get_bd_intf_pins rfdc/s_axi]
   connect_bd_intf_net -intf_net ps8_0_axi_periph_M04_AXI [get_bd_intf_pins adc_to_udp_stream_C/S00_AXI] [get_bd_intf_pins ps8_0_axi_periph/M04_AXI]
   connect_bd_intf_net -intf_net ps8_0_axi_periph_M05_AXI [get_bd_intf_pins adc_to_udp_stream_D/S00_AXI] [get_bd_intf_pins ps8_0_axi_periph/M05_AXI]
+  connect_bd_intf_net -intf_net ps8_0_axi_periph_M06_AXI [get_bd_intf_pins ps8_0_axi_periph/M06_AXI] [get_bd_intf_pins function_gen_to_dac_0/s00_axi]
+  connect_bd_intf_net -intf_net function_gen_to_dac_0_M00_AXIS [get_bd_intf_pins function_gen_to_dac_0/m00_axis] [get_bd_intf_pins rfdc/s00_axis]
   connect_bd_intf_net -intf_net rfdc_m00_axis [get_bd_intf_pins axis_combiner_D/S00_AXIS] [get_bd_intf_pins rfdc/m00_axis]
   connect_bd_intf_net -intf_net rfdc_m01_axis [get_bd_intf_pins axis_combiner_D/S01_AXIS] [get_bd_intf_pins rfdc/m01_axis]
   connect_bd_intf_net -intf_net rfdc_m02_axis [get_bd_intf_pins axis_combiner_C/S00_AXIS] [get_bd_intf_pins rfdc/m02_axis]
@@ -2223,8 +2239,17 @@ Port;FD4A0000;FD4AFFFF;0|FPD;DPDMA;FD4C0000;FD4CFFFF;0|FPD;DDR_XMPU5_CFG;FD05000
   connect_bd_net -net qsfp_sel_dout [get_bd_ports qsfp_lpmode_ls] [get_bd_ports qsfp_modsell_ls] [get_bd_pins qsfp_sel/dout]
   connect_bd_net -net rfdc_clk_adc0 [get_bd_pins adc_to_udp_stream_C/s01_axis_aclk] [get_bd_pins adc_to_udp_stream_D/s01_axis_aclk] [get_bd_pins axis_combiner_C/aclk] [get_bd_pins axis_combiner_D/aclk] [get_bd_pins axis_subset_converter_C/aclk] [get_bd_pins axis_subset_converter_D/aclk] [get_bd_pins proc_sys_reset_0/slowest_sync_clk] [get_bd_pins rfdc/clk_adc0] [get_bd_pins rfdc/m0_axis_aclk]
   connect_bd_net -net rfdc_clk_adc2 [get_bd_pins adc_to_udp_stream_A/s01_axis_aclk] [get_bd_pins adc_to_udp_stream_B/s01_axis_aclk] [get_bd_pins axis_combiner_A/aclk] [get_bd_pins axis_combiner_B/aclk] [get_bd_pins axis_subset_converter_A/aclk] [get_bd_pins axis_subset_converter_B/aclk] [get_bd_pins rfdc/clk_adc2] [get_bd_pins rfdc/m2_axis_aclk] [get_bd_pins rst_307M2/slowest_sync_clk]
+  
+  # DAC Clock Distribution
+  # DAC0 clock (153.6 MHz) to function generator and reset controller
+  connect_bd_net -net rfdc_clk_dac0 [get_bd_pins rfdc/clk_dac0] [get_bd_pins proc_sys_reset_1/slowest_sync_clk] [get_bd_pins function_gen_to_dac_0/m00_axis_aclk]
+  
   connect_bd_net -net rst_307M2_peripheral_aresetn [get_bd_pins adc_to_udp_stream_A/s01_axis_aresetn] [get_bd_pins adc_to_udp_stream_B/s01_axis_aresetn] [get_bd_pins axis_combiner_A/aresetn] [get_bd_pins axis_combiner_B/aresetn] [get_bd_pins axis_subset_converter_A/aresetn] [get_bd_pins axis_subset_converter_B/aresetn] [get_bd_pins rfdc/m2_axis_aresetn] [get_bd_pins rst_307M2/peripheral_aresetn]
-  connect_bd_net -net rst_ps8_0_96M_peripheral_aresetn [get_bd_pins adc_to_udp_stream_A/s00_axi_aresetn] [get_bd_pins adc_to_udp_stream_B/s00_axi_aresetn] [get_bd_pins adc_to_udp_stream_C/s00_axi_aresetn] [get_bd_pins adc_to_udp_stream_D/s00_axi_aresetn] [get_bd_pins clk_wiz_0/resetn] [get_bd_pins ps8_0_axi_periph/ARESETN] [get_bd_pins ps8_0_axi_periph/M00_ARESETN] [get_bd_pins ps8_0_axi_periph/M01_ARESETN] [get_bd_pins ps8_0_axi_periph/M02_ARESETN] [get_bd_pins ps8_0_axi_periph/M03_ARESETN] [get_bd_pins ps8_0_axi_periph/M04_ARESETN] [get_bd_pins ps8_0_axi_periph/M05_ARESETN] [get_bd_pins ps8_0_axi_periph/S00_ARESETN] [get_bd_pins rfdc/s_axi_aresetn] [get_bd_pins rfdc/s0_axis_aresetn] [get_bd_pins rst_ps8_0_96M/peripheral_aresetn] [get_bd_pins xxv_ethernet_0/s_axi_aresetn_0]
+  
+  # Function Generator to DAC Reset Connections
+  # DAC clock domain reset for AXI4-Stream interface
+  connect_bd_net -net proc_sys_reset_1_peripheral_aresetn1 [get_bd_pins proc_sys_reset_1/peripheral_aresetn] [get_bd_pins function_gen_to_dac_0/m00_axis_aresetn]
+  connect_bd_net -net rst_ps8_0_96M_peripheral_aresetn [get_bd_pins adc_to_udp_stream_A/s00_axi_aresetn] [get_bd_pins adc_to_udp_stream_B/s00_axi_aresetn] [get_bd_pins adc_to_udp_stream_C/s00_axi_aresetn] [get_bd_pins adc_to_udp_stream_D/s00_axi_aresetn] [get_bd_pins clk_wiz_0/resetn] [get_bd_pins ps8_0_axi_periph/ARESETN] [get_bd_pins ps8_0_axi_periph/M00_ARESETN] [get_bd_pins ps8_0_axi_periph/M01_ARESETN] [get_bd_pins ps8_0_axi_periph/M02_ARESETN] [get_bd_pins ps8_0_axi_periph/M03_ARESETN] [get_bd_pins ps8_0_axi_periph/M04_ARESETN] [get_bd_pins ps8_0_axi_periph/M05_ARESETN] [get_bd_pins ps8_0_axi_periph/S00_ARESETN] [get_bd_pins rfdc/s_axi_aresetn] [get_bd_pins rfdc/s0_axis_aresetn] [get_bd_pins rst_ps8_0_96M/peripheral_aresetn] [get_bd_pins xxv_ethernet_0/s_axi_aresetn_0] [get_bd_pins ps8_0_axi_periph/M06_ARESETN] [get_bd_pins function_gen_to_dac_0/s00_axi_aresetn]
   connect_bd_net -net rst_ps8_0_96M_peripheral_reset [get_bd_pins rst_ps8_0_96M/peripheral_reset] [get_bd_pins xxv_ethernet_0/sys_reset]
   
   
@@ -2232,8 +2257,8 @@ Port;FD4A0000;FD4AFFFF;0|FPD;DPDMA;FD4C0000;FD4CFFFF;0|FPD;DDR_XMPU5_CFG;FD05000
   connect_bd_net -net xlconstant_0_dout1 [get_bd_pins tx_preamble/dout] [get_bd_pins xxv_ethernet_0/tx_preamblein_0]
   connect_bd_net -net xlconstant_1_dout [get_bd_pins gt_clk_select/dout] [get_bd_pins xxv_ethernet_0/rxoutclksel_in_0] [get_bd_pins xxv_ethernet_0/txoutclksel_in_0]
   connect_bd_net -net xlconstant_2_dout [get_bd_pins control_input_disable/dout] [get_bd_pins xxv_ethernet_0/ctl_tx_send_idle_0] [get_bd_pins xxv_ethernet_0/ctl_tx_send_lfi_0] [get_bd_pins xxv_ethernet_0/ctl_tx_send_rfi_0] [get_bd_pins xxv_ethernet_0/tx_axis_tuser_0]
-  connect_bd_net -net zynq_ultra_ps_e_0_pl_clk0 [get_bd_pins adc_to_udp_stream_A/s00_axi_aclk] [get_bd_pins adc_to_udp_stream_B/s00_axi_aclk] [get_bd_pins adc_to_udp_stream_C/s00_axi_aclk] [get_bd_pins adc_to_udp_stream_D/s00_axi_aclk] [get_bd_pins clk_wiz_0/clk_in1] [get_bd_pins ps8_0_axi_periph/ACLK] [get_bd_pins ps8_0_axi_periph/M00_ACLK] [get_bd_pins ps8_0_axi_periph/M01_ACLK] [get_bd_pins ps8_0_axi_periph/M02_ACLK] [get_bd_pins ps8_0_axi_periph/M03_ACLK] [get_bd_pins ps8_0_axi_periph/M04_ACLK] [get_bd_pins ps8_0_axi_periph/M05_ACLK] [get_bd_pins ps8_0_axi_periph/S00_ACLK] [get_bd_pins rfdc/s_axi_aclk] [get_bd_pins rfdc/s0_axis_aclk] [get_bd_pins rst_ps8_0_96M/slowest_sync_clk] [get_bd_pins xxv_ethernet_0/dclk] [get_bd_pins xxv_ethernet_0/s_axi_aclk_0] [get_bd_pins zynq_ultra_ps_e_0/maxihpm0_fpd_aclk] [get_bd_pins zynq_ultra_ps_e_0/saxihp2_fpd_aclk] [get_bd_pins zynq_ultra_ps_e_0/pl_clk0]
-  connect_bd_net -net zynq_ultra_ps_e_0_pl_resetn0 [get_bd_pins eth_tx_clk_reset/ext_reset_in] [get_bd_pins proc_sys_reset_0/ext_reset_in] [get_bd_pins rst_307M2/ext_reset_in] [get_bd_pins rst_ps8_0_96M/ext_reset_in] [get_bd_pins zynq_ultra_ps_e_0/pl_resetn0]
+  connect_bd_net -net zynq_ultra_ps_e_0_pl_clk0 [get_bd_pins adc_to_udp_stream_A/s00_axi_aclk] [get_bd_pins adc_to_udp_stream_B/s00_axi_aclk] [get_bd_pins adc_to_udp_stream_C/s00_axi_aclk] [get_bd_pins adc_to_udp_stream_D/s00_axi_aclk] [get_bd_pins clk_wiz_0/clk_in1] [get_bd_pins ps8_0_axi_periph/ACLK] [get_bd_pins ps8_0_axi_periph/M00_ACLK] [get_bd_pins ps8_0_axi_periph/M01_ACLK] [get_bd_pins ps8_0_axi_periph/M02_ACLK] [get_bd_pins ps8_0_axi_periph/M03_ACLK] [get_bd_pins ps8_0_axi_periph/M04_ACLK] [get_bd_pins ps8_0_axi_periph/M05_ACLK] [get_bd_pins ps8_0_axi_periph/S00_ACLK] [get_bd_pins rfdc/s_axi_aclk] [get_bd_pins rfdc/s0_axis_aclk] [get_bd_pins rst_ps8_0_96M/slowest_sync_clk] [get_bd_pins xxv_ethernet_0/dclk] [get_bd_pins xxv_ethernet_0/s_axi_aclk_0] [get_bd_pins zynq_ultra_ps_e_0/maxihpm0_fpd_aclk] [get_bd_pins zynq_ultra_ps_e_0/saxihp2_fpd_aclk] [get_bd_pins zynq_ultra_ps_e_0/pl_clk0] [get_bd_pins ps8_0_axi_periph/M06_ACLK] [get_bd_pins function_gen_to_dac_0/s00_axi_aclk]
+  connect_bd_net -net zynq_ultra_ps_e_0_pl_resetn0 [get_bd_pins eth_tx_clk_reset/ext_reset_in] [get_bd_pins proc_sys_reset_0/ext_reset_in] [get_bd_pins rst_307M2/ext_reset_in] [get_bd_pins rst_ps8_0_96M/ext_reset_in] [get_bd_pins proc_sys_reset_1/ext_reset_in] [get_bd_pins zynq_ultra_ps_e_0/pl_resetn0]
 
   ##################################################################
   # ADDRESS SPACE ASSIGNMENTS
