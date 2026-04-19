@@ -35,11 +35,10 @@ module adc_to_udp_stream_v1_0_tb;
     reg m00_axis_aclk;
     reg m00_axis_aresetn;
 
-    // Outgoing ADC clock and PPS
-    reg adc_clk;
+    // PPS (DUT has no separate adc_clk; timing uses s01_axis_aclk)
     reg pps_comp;
 
-    // Signals for AXI4-Lite (S00_AXI)
+    // Signals for AXI4-Lite (S00_AXI) — testbench is master, DUT is slave
     reg [C_S00_AXI_ADDR_WIDTH-1 : 0] s00_axi_awaddr;
     reg [2 : 0] s00_axi_awprot;
     reg s00_axi_awvalid;
@@ -47,18 +46,18 @@ module adc_to_udp_stream_v1_0_tb;
     reg [C_S00_AXI_DATA_WIDTH-1 : 0] s00_axi_wdata;
     reg [(C_S00_AXI_DATA_WIDTH/8)-1 : 0] s00_axi_wstrb;
     reg s00_axi_wvalid;
-    reg s00_axi_wready;
-    reg [1 : 0] s00_axi_bresp;
+    wire s00_axi_wready;
+    wire [1 : 0] s00_axi_bresp;
     wire s00_axi_bvalid;
     reg s00_axi_bready;
-    wire [C_S00_AXI_ADDR_WIDTH-1 : 0] s00_axi_araddr;
-    wire [2 : 0] s00_axi_arprot;
-    wire s00_axi_arvalid;
-    reg s00_axi_arready;
-    reg [C_S00_AXI_DATA_WIDTH-1 : 0] s00_axi_rdata;
-    reg [1 : 0] s00_axi_rresp;
-    reg s00_axi_rvalid;
-    wire s00_axi_rready;
+    reg [C_S00_AXI_ADDR_WIDTH-1 : 0] s00_axi_araddr;
+    reg [2 : 0] s00_axi_arprot;
+    reg s00_axi_arvalid;
+    wire s00_axi_arready;
+    wire [C_S00_AXI_DATA_WIDTH-1 : 0] s00_axi_rdata;
+    wire [1 : 0] s00_axi_rresp;
+    wire s00_axi_rvalid;
+    reg s00_axi_rready;
 
     // Incoming AXIS signals
     reg s01_axis_tvalid;
@@ -119,7 +118,6 @@ module adc_to_udp_stream_v1_0_tb;
         .m00_axis_tlast(m00_axis_tlast),
         .m00_axis_tready(m00_axis_tready),
 
-        .adc_clk(adc_clk),
         .pps_comp(pps_comp)
     );
 
@@ -139,12 +137,6 @@ module adc_to_udp_stream_v1_0_tb;
     initial begin
         m00_axis_aclk = 0;
         forever #3.2ns m00_axis_aclk = ~m00_axis_aclk;  // Toggle 
-    end
-
-    // ADC Clock generation
-    initial begin
-        adc_clk = 0;
-        forever #2ns adc_clk = ~adc_clk;
     end
 
     // PPS generation (Run fast for simulation)
@@ -180,6 +172,11 @@ module adc_to_udp_stream_v1_0_tb;
         s00_axi_awvalid = 1'b0;
         s00_axi_wvalid = 1'b0;
 
+        s00_axi_araddr = {C_S00_AXI_ADDR_WIDTH{1'b0}};
+        s00_axi_arprot = 3'h0;
+        s00_axi_arvalid = 1'b0;
+        s00_axi_rready = 1'b1;
+
         ///////////////////////////////////////////////////////////////
         // Write bit 0 on address 0 on s00 AXI bus at 10us
         #10us; 
@@ -197,7 +194,7 @@ module adc_to_udp_stream_v1_0_tb;
 
         // Wait for WREADY
         @(posedge s00_axi_aclk);
-        while (!s00_axi_awready) @(posedge s00_axi_aclk); // Wait until ready
+        while (!s00_axi_wready) @(posedge s00_axi_aclk);
         s00_axi_wvalid = 1'b0;
         s00_axi_awvalid = 1'b0;
 
@@ -227,7 +224,7 @@ module adc_to_udp_stream_v1_0_tb;
 
         // Wait for WREADY
         @(posedge s00_axi_aclk);
-        while (!s00_axi_awready) @(posedge s00_axi_aclk); // Wait until ready
+        while (!s00_axi_wready) @(posedge s00_axi_aclk);
         s00_axi_wvalid = 1'b0;
         s00_axi_awvalid = 1'b0;
 
@@ -257,7 +254,7 @@ module adc_to_udp_stream_v1_0_tb;
 
         // Wait for WREADY
         @(posedge s00_axi_aclk);
-        while (!s00_axi_awready) @(posedge s00_axi_aclk); // Wait until ready
+        while (!s00_axi_wready) @(posedge s00_axi_aclk);
         s00_axi_wvalid = 1'b0;
         s00_axi_awvalid = 1'b0;
 
