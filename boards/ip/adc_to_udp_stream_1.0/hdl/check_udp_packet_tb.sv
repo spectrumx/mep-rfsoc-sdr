@@ -351,14 +351,14 @@ module check_udp_packet_tb;
         // Beat 1: samples 4,5,6,7 -> FIFO word = {7,6,5,4}
         //   prev_hi = word0[63:48] = sample 3 = 3
         //   shift-realign: {word1[47:0], 0x0003} = {02,00,01,00,00,00,00,03}
-        exp_payload[ 0] = 8'h00; exp_payload[ 1] = 8'h00;
-        exp_payload[ 2] = 8'h00; exp_payload[ 3] = 8'h00;
-        exp_payload[ 4] = 8'h00; exp_payload[ 5] = 8'h00;
-        exp_payload[ 6] = 8'h00; exp_payload[ 7] = 8'h00;
-        exp_payload[ 8] = 8'h02; exp_payload[ 9] = 8'h00;
-        exp_payload[10] = 8'h01; exp_payload[11] = 8'h00;
-        exp_payload[12] = 8'h00; exp_payload[13] = 8'h00;
-        exp_payload[14] = 8'h00; exp_payload[15] = 8'h03;
+        exp_payload[ 0] = 8'h50; exp_payload[ 1] = 8'h00;  // Byte 106-107: sample 80 (0x0050) low/high
+        exp_payload[ 2] = 8'h51; exp_payload[ 3] = 8'h00;  // Byte 108-109: sample 81 (0x0051) low/high
+        exp_payload[ 4] = 8'h52; exp_payload[ 5] = 8'h00;  // Byte 110-111: sample 82 (0x0052) low/high
+        exp_payload[ 6] = 8'h53; exp_payload[ 7] = 8'h00;  // Byte 112-113: sample 83 (0x0053) low/high
+        exp_payload[ 8] = 8'h54; exp_payload[ 9] = 8'h00;  // Byte 114-115: sample 84 (0x0054) low/high
+        exp_payload[10] = 8'h55; exp_payload[11] = 8'h00;  // Byte 116-117: sample 85 (0x0055) low/high
+        exp_payload[12] = 8'h56; exp_payload[13] = 8'h00;  // Byte 118-119: sample 86 (0x0056) low/high
+        exp_payload[14] = 8'h57; exp_payload[15] = 8'h00;  // Byte 120-121: sample 87 (0x0057) low/high
 
         // ======== PRINT OUTPUT ========
         $display("");
