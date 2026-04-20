@@ -3,7 +3,7 @@
    <wave_state>
    </wave_state>
    <db_ref_list>
-      <db_ref path="adc_to_udp_stream_tb_sim.wdb" id="1">
+      <db_ref path="sim_adc_to_udp_stream.wdb" id="1">
          <top_modules>
             <top_module name="adc_to_udp_stream_v1_0_tb" />
             <top_module name="glbl" />
@@ -11,15 +11,15 @@
       </db_ref>
    </db_ref_list>
    <zoom_setting>
-      <ZoomStartTime time="0.000000 us"></ZoomStartTime>
-      <ZoomEndTime time="291.600001 us"></ZoomEndTime>
-      <Cursor1Time time="700.000000 us"></Cursor1Time>
+      <ZoomStartTime time="554,039.100 ns"></ZoomStartTime>
+      <ZoomEndTime time="554,069.101 ns"></ZoomEndTime>
+      <Cursor1Time time="554,051.200 ns"></Cursor1Time>
    </zoom_setting>
    <column_width_setting>
-      <NameColumnWidth column_width="276"></NameColumnWidth>
-      <ValueColumnWidth column_width="112"></ValueColumnWidth>
+      <NameColumnWidth column_width="171"></NameColumnWidth>
+      <ValueColumnWidth column_width="80"></ValueColumnWidth>
    </column_width_setting>
-   <WVObjectSize size="18" />
+   <WVObjectSize size="20" />
    <wvobject type="logic" fp_name="/adc_to_udp_stream_v1_0_tb/s00_axi_aclk">
       <obj_property name="ElementShortName">s00_axi_aclk</obj_property>
       <obj_property name="ObjectShortName">s00_axi_aclk</obj_property>
@@ -72,6 +72,14 @@
       <obj_property name="ElementShortName">m00_axis_tdata[63:0]</obj_property>
       <obj_property name="ObjectShortName">m00_axis_tdata[63:0]</obj_property>
    </wvobject>
+   <wvobject type="logic" fp_name="/adc_to_udp_stream_v1_0_tb/dut/start_udp_header">
+      <obj_property name="ElementShortName">start_udp_header</obj_property>
+      <obj_property name="ObjectShortName">start_udp_header</obj_property>
+   </wvobject>
+   <wvobject type="logic" fp_name="/adc_to_udp_stream_v1_0_tb/dut/in_udp_header">
+      <obj_property name="ElementShortName">in_udp_header</obj_property>
+      <obj_property name="ObjectShortName">in_udp_header</obj_property>
+   </wvobject>
    <wvobject type="logic" fp_name="/adc_to_udp_stream_v1_0_tb/dut/fifo_0_read_en">
       <obj_property name="ElementShortName">fifo_0_read_en</obj_property>
       <obj_property name="ObjectShortName">fifo_0_read_en</obj_property>
@@ -80,13 +88,13 @@
       <obj_property name="ElementShortName">fifo_1_read_en</obj_property>
       <obj_property name="ObjectShortName">fifo_1_read_en</obj_property>
    </wvobject>
-   <wvobject type="logic" fp_name="/adc_to_udp_stream_v1_0_tb/dut/start_udp_header">
-      <obj_property name="ElementShortName">start_udp_header</obj_property>
-      <obj_property name="ObjectShortName">start_udp_header</obj_property>
+   <wvobject type="logic" fp_name="/adc_to_udp_stream_v1_0_tb/dut/start_payload">
+      <obj_property name="ElementShortName">start_payload</obj_property>
+      <obj_property name="ObjectShortName">start_payload</obj_property>
    </wvobject>
-   <wvobject type="logic" fp_name="/adc_to_udp_stream_v1_0_tb/dut/in_udp_header">
-      <obj_property name="ElementShortName">in_udp_header</obj_property>
-      <obj_property name="ObjectShortName">in_udp_header</obj_property>
+   <wvobject type="logic" fp_name="/adc_to_udp_stream_v1_0_tb/dut/in_payload">
+      <obj_property name="ElementShortName">in_payload</obj_property>
+      <obj_property name="ObjectShortName">in_payload</obj_property>
    </wvobject>
    <wvobject type="array" fp_name="/adc_to_udp_stream_v1_0_tb/dut/sample_idx">
       <obj_property name="ElementShortName">sample_idx[63:0]</obj_property>
