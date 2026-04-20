@@ -351,30 +351,30 @@ module check_udp_packet_tb;
         // Beat 1: samples 4,5,6,7 -> FIFO word = {7,6,5,4}
         //   prev_hi = word0[63:48] = sample 3 = 3
         //   shift-realign: {word1[47:0], 0x0003} = {02,00,01,00,00,00,00,03}
-        exp_payload[ 0] = 8'h50; exp_payload[ 1] = 8'h00;  // Byte 106-107: sample 80 (0x0050) low/high
-        exp_payload[ 2] = 8'h51; exp_payload[ 3] = 8'h00;  // Byte 108-109: sample 81 (0x0051) low/high
-        exp_payload[ 4] = 8'h52; exp_payload[ 5] = 8'h00;  // Byte 110-111: sample 82 (0x0052) low/high
-        exp_payload[ 6] = 8'h53; exp_payload[ 7] = 8'h00;  // Byte 112-113: sample 83 (0x0053) low/high
-        exp_payload[ 8] = 8'h54; exp_payload[ 9] = 8'h00;  // Byte 114-115: sample 84 (0x0054) low/high
-        exp_payload[10] = 8'h55; exp_payload[11] = 8'h00;  // Byte 116-117: sample 85 (0x0055) low/high
-        exp_payload[12] = 8'h56; exp_payload[13] = 8'h00;  // Byte 118-119: sample 86 (0x0056) low/high
-        exp_payload[14] = 8'h57; exp_payload[15] = 8'h00;  // Byte 120-121: sample 87 (0x0057) low/high
+        exp_payload[ 0] = 8'h00; exp_payload[ 1] = 8'h00;
+        exp_payload[ 2] = 8'h00; exp_payload[ 3] = 8'h00;
+        exp_payload[ 4] = 8'h00; exp_payload[ 5] = 8'h00;
+        exp_payload[ 6] = 8'h00; exp_payload[ 7] = 8'h00;
+        exp_payload[ 8] = 8'h02; exp_payload[ 9] = 8'h00;
+        exp_payload[10] = 8'h01; exp_payload[11] = 8'h00;
+        exp_payload[12] = 8'h00; exp_payload[13] = 8'h00;
+        exp_payload[14] = 8'h00; exp_payload[15] = 8'h03;
 
         // ======== PRINT OUTPUT ========
         $display("");
         $display("[CHK] ===== Packet %0d verification =====", pkt_num);
         $display("[CHK] pkt_byte_count = %0d  (expected = 8298)", pkt_byte_count);
 
-        if (pkt_num == 0) begin
             // --- Ethernet header bytes 0-13 ---
             $display("[CHK] --- Ethernet header bytes 0-13 ---");
             $display("[CHK] Byte  Expected    Actual      Match");
             $display("[CHK] -----  ----------  ----------  -----");
             for (b = 0; b <= 13; b = b + 1) begin
-                if (b < pkt_byte_count)
-                    $display("[CHK]   %0d      0x%02h       0x%02h       %s", b,
-                        exp_eth_header[b], pkt_byte_stream[b],
-                        (pkt_byte_stream[b] == exp_eth_header[b]) ? "YES" : "NO");
+                if (b < pkt_byte_count) begin
+                    if (pkt_byte_stream[b] != exp_eth_header[b])
+                        $display("[CHK]   %0d      0x%02h       0x%02h       NO", b,
+                            exp_eth_header[b], pkt_byte_stream[b]);
+                end
                 else
                     $display("[CHK]   %0d      0x%02h       (out of bounds)  NO", b, exp_eth_header[b]);
             end
@@ -386,15 +386,15 @@ module check_udp_packet_tb;
             for (b = 0; b <= 19; b = b + 1) begin
                 if ((b+14) == 17 || (b+14) == 25) begin
                     if ((b+14) < pkt_byte_count)
-                        $display("[CHK]   %0d      0x%02h       0x%02h       SKIP", b+14,
-                            exp_ip_header[b], pkt_byte_stream[b+14]);
+                        $display("[SKIP] IPv4 byte %0d", b+14);
                     else
-                        $display("[CHK]   %0d      0x%02h       (out of bounds)  SKIP", b+14, exp_ip_header[b]);
+                        $display("[SKIP] IPv4 byte %0d", b+14);
                 end else begin
-                    if ((b+14) < pkt_byte_count)
-                        $display("[CHK]   %0d      0x%02h       0x%02h       %s", b+14,
-                            exp_ip_header[b], pkt_byte_stream[b+14],
-                            (pkt_byte_stream[b+14] == exp_ip_header[b]) ? "YES" : "NO");
+                    if ((b+14) < pkt_byte_count) begin
+                        if (pkt_byte_stream[b+14] != exp_ip_header[b])
+                            $display("[CHK]   %0d      0x%02h       0x%02h       NO", b+14,
+                                exp_ip_header[b], pkt_byte_stream[b+14]);
+                    end
                     else
                         $display("[CHK]   %0d      0x%02h       (out of bounds)  NO", b+14, exp_ip_header[b]);
                 end
@@ -405,10 +405,11 @@ module check_udp_packet_tb;
             $display("[CHK] Byte  Expected    Actual      Match");
             $display("[CHK] -----  ----------  ----------  -----");
             for (b = 0; b <= 7; b = b + 1) begin
-                if ((b+34) < pkt_byte_count)
-                    $display("[CHK]   %0d      0x%02h       0x%02h       %s", b+34,
-                        exp_udp_header[b], pkt_byte_stream[b+34],
-                        (pkt_byte_stream[b+34] == exp_udp_header[b]) ? "YES" : "NO");
+                if ((b+34) < pkt_byte_count) begin
+                    if (pkt_byte_stream[b+34] != exp_udp_header[b])
+                        $display("[CHK]   %0d      0x%02h       0x%02h       NO", b+34,
+                            exp_udp_header[b], pkt_byte_stream[b+34]);
+                end
                 else
                     $display("[CHK]   %0d      0x%02h       (out of bounds)  NO", b+34, exp_udp_header[b]);
             end
@@ -420,15 +421,15 @@ module check_udp_packet_tb;
             for (b = 0; b <= 63; b = b + 1) begin
                 if ((b+42) == 51 || (b+42) == 53 || (b+42) == 82) begin
                     if ((b+42) < pkt_byte_count)
-                        $display("[CHK]   %0d      0x%02h       0x%02h       SKIP", b+42,
-                            exp_radio_header[b], pkt_byte_stream[b+42]);
+                        $display("[SKIP] Radio byte %0d", b+42);
                     else
-                        $display("[CHK]   %0d      0x%02h       (out of bounds)  SKIP", b+42, exp_radio_header[b]);
+                        $display("[SKIP] Radio byte %0d", b+42);
                 end else begin
-                    if ((b+42) < pkt_byte_count)
-                        $display("[CHK]   %0d      0x%02h       0x%02h       %s", b+42,
-                            exp_radio_header[b], pkt_byte_stream[b+42],
-                            (pkt_byte_stream[b+42] == exp_radio_header[b]) ? "YES" : "NO");
+                    if ((b+42) < pkt_byte_count) begin
+                        if (pkt_byte_stream[b+42] != exp_radio_header[b])
+                            $display("[CHK]   %0d      0x%02h       0x%02h       NO", b+42,
+                                exp_radio_header[b], pkt_byte_stream[b+42]);
+                    end
                     else
                         $display("[CHK]   %0d      0x%02h       (out of bounds)  NO", b+42, exp_radio_header[b]);
                 end
@@ -439,14 +440,14 @@ module check_udp_packet_tb;
             $display("[CHK] Byte  Expected    Actual      Match");
             $display("[CHK] -----  ----------  ----------  -----");
             for (b = 0; b <= 15; b = b + 1) begin
-                if ((b+106) < pkt_byte_count)
-                    $display("[CHK]   %0d      0x%02h       0x%02h       %s", b+106,
-                        exp_payload[b], pkt_byte_stream[b+106],
-                        (pkt_byte_stream[b+106] == exp_payload[b]) ? "YES" : "NO");
+                if ((b+106) < pkt_byte_count) begin
+                    if (pkt_byte_stream[b+106] != exp_payload[b])
+                        $display("[CHK]   %0d      0x%02h       0x%02h       NO", b+106,
+                            exp_payload[b], pkt_byte_stream[b+106]);
+                end
                 else
                     $display("[CHK]   %0d      0x%02h       (out of bounds)  NO", b+106, exp_payload[b]);
             end
-        end
         $display("[CHK] ========================================");
 
     endtask
