@@ -360,75 +360,75 @@ module check_udp_packet_tb;
         $display("[CHK] ===== Packet %0d verification =====", pkt_num);
         $display("[CHK] pkt_byte_count = %0d  (expected = 8306)", pkt_byte_count);
 
-        if (pkt_num == 0) begin
-            // --- Ethernet header bytes 0-13 ---
-            $display("[CHK] --- Ethernet header bytes 0-13 ---");
-            $display("[CHK] Byte  Expected    Actual      Match");
-            $display("[CHK] -----  ----------  ----------  -----");
-            for (b = 0; b <= 13; b = b + 1) begin
-                if (b < pkt_byte_count)
-                    $display("[CHK]   %0d      0x%02h       0x%02h       %s", b,
-                        exp_eth_header[b], pkt_byte_stream[b],
-                        (pkt_byte_stream[b] == exp_eth_header[b]) ? "YES" : "NO");
+        // --- Ethernet header bytes 0-13 ---
+        $display("[CHK] --- Ethernet header bytes 0-13 ---");
+        $display("[CHK] Byte  Expected    Actual      Match");
+        $display("[CHK] -----  ----------  ----------  -----");
+        for (b = 0; b <= 13; b = b + 1) begin
+            if (b < pkt_byte_count)
+                $display("[CHK]   %0d      0x%02h       0x%02h       %s", b,
+                    exp_eth_header[b], pkt_byte_stream[b],
+                    (pkt_byte_stream[b] == exp_eth_header[b]) ? "YES" : "NO");
+            else
+                $display("[CHK]   %0d      0x%02h       (out of bounds)  NO", b, exp_eth_header[b]);
+        end
+
+        // --- IPv4 header bytes 14-33 ---
+        $display("[CHK] --- IPv4 header bytes 14-33 ---");
+        $display("[CHK] Byte  Expected    Actual      Match");
+        $display("[CHK] -----  ----------  ----------  -----");
+        for (b = 0; b <= 19; b = b + 1) begin
+            if ((b+14) == 17 || (b+14) == 25) begin
+                if ((b+14) < pkt_byte_count)
+                    $display("[CHK]   %0d      0x%02h       0x%02h       SKIP", b,
+                        exp_ip_header[b], pkt_byte_stream[b+14]);
                 else
-                    $display("[CHK]   %0d      0x%02h       (out of bounds)  NO", b, exp_eth_header[b]);
-            end
-
-            // --- IPv4 header bytes 14-33 ---
-            $display("[CHK] --- IPv4 header bytes 14-33 ---");
-            $display("[CHK] Byte  Expected    Actual      Match");
-            $display("[CHK] -----  ----------  ----------  -----");
-            for (b = 0; b <= 19; b = b + 1) begin
-                if ((b+14) == 17 || (b+14) == 25) begin
-                    if ((b+14) < pkt_byte_count)
-                        $display("[CHK]   %0d      0x%02h       0x%02h       SKIP", b,
-                            exp_ip_header[b], pkt_byte_stream[b+14]);
-                    else
-                        $display("[CHK]   %0d      0x%02h       (out of bounds)  SKIP", b, exp_ip_header[b]);
-                end else begin
-                    if ((b+14) < pkt_byte_count)
-                        $display("[CHK]   %0d      0x%02h       0x%02h       %s", b,
-                            exp_ip_header[b], pkt_byte_stream[b+14],
-                            (pkt_byte_stream[b+14] == exp_ip_header[b]) ? "YES" : "NO");
-                    else
-                        $display("[CHK]   %0d      0x%02h       (out of bounds)  NO", b, exp_ip_header[b]);
-                end
-            end
-
-            // --- UDP header bytes 34-41 ---
-            $display("[CHK] --- UDP header bytes 34-41 ---");
-            $display("[CHK] Byte  Expected    Actual      Match");
-            $display("[CHK] -----  ----------  ----------  -----");
-            for (b = 0; b <= 7; b = b + 1) begin
-                if ((b+34) < pkt_byte_count)
+                    $display("[CHK]   %0d      0x%02h       (out of bounds)  SKIP", b, exp_ip_header[b]);
+            end else begin
+                if ((b+14) < pkt_byte_count)
                     $display("[CHK]   %0d      0x%02h       0x%02h       %s", b,
-                        exp_udp_header[b], pkt_byte_stream[b+34],
-                        (pkt_byte_stream[b+34] == exp_udp_header[b]) ? "YES" : "NO");
+                        exp_ip_header[b], pkt_byte_stream[b+14],
+                        (pkt_byte_stream[b+14] == exp_ip_header[b]) ? "YES" : "NO");
                 else
-                    $display("[CHK]   %0d      0x%02h       (out of bounds)  NO", b, exp_udp_header[b]);
+                    $display("[CHK]   %0d      0x%02h       (out of bounds)  NO", b, exp_ip_header[b]);
             end
+        end
 
-            // --- Radio header bytes 42-105 ---
-            $display("[CHK] --- Radio header bytes 42-105 ---");
-            $display("[CHK] Byte  Expected    Actual      Match");
-            $display("[CHK] -----  ----------  ----------  -----");
-            for (b = 0; b <= 63; b = b + 1) begin
-                if ((b+42) == 51 || (b+42) == 53 || (b+42) == 82) begin
-                    if ((b+42) < pkt_byte_count)
-                        $display("[CHK]   %0d      0x%02h       0x%02h       SKIP", b,
-                            exp_radio_header[b], pkt_byte_stream[b+42]);
-                    else
-                        $display("[CHK]   %0d      0x%02h       (out of bounds)  SKIP", b, exp_radio_header[b]);
-                end else begin
-                    if ((b+42) < pkt_byte_count)
-                        $display("[CHK]   %0d      0x%02h       0x%02h       %s", b,
-                            exp_radio_header[b], pkt_byte_stream[b+42],
-                            (pkt_byte_stream[b+42] == exp_radio_header[b]) ? "YES" : "NO");
-                    else
-                        $display("[CHK]   %0d      0x%02h       (out of bounds)  NO", b, exp_radio_header[b]);
-                end
+        // --- UDP header bytes 34-41 ---
+        $display("[CHK] --- UDP header bytes 34-41 ---");
+        $display("[CHK] Byte  Expected    Actual      Match");
+        $display("[CHK] -----  ----------  ----------  -----");
+        for (b = 0; b <= 7; b = b + 1) begin
+            if ((b+34) < pkt_byte_count)
+                $display("[CHK]   %0d      0x%02h       0x%02h       %s", b,
+                    exp_udp_header[b], pkt_byte_stream[b+34],
+                    (pkt_byte_stream[b+34] == exp_udp_header[b]) ? "YES" : "NO");
+            else
+                $display("[CHK]   %0d      0x%02h       (out of bounds)  NO", b, exp_udp_header[b]);
+        end
+
+        // --- Radio header bytes 42-105 ---
+        $display("[CHK] --- Radio header bytes 42-105 ---");
+        $display("[CHK] Byte  Expected    Actual      Match");
+        $display("[CHK] -----  ----------  ----------  -----");
+        for (b = 0; b <= 63; b = b + 1) begin
+            if ((b+42) == 51 || (b+42) == 53 || (b+42) == 82) begin
+                if ((b+42) < pkt_byte_count)
+                    $display("[CHK]   %0d      0x%02h       0x%02h       SKIP", b,
+                        exp_radio_header[b], pkt_byte_stream[b+42]);
+                else
+                    $display("[CHK]   %0d      0x%02h       (out of bounds)  SKIP", b, exp_radio_header[b]);
+            end else begin
+                if ((b+42) < pkt_byte_count)
+                    $display("[CHK]   %0d      0x%02h       0x%02h       %s", b,
+                        exp_radio_header[b], pkt_byte_stream[b+42],
+                        (pkt_byte_stream[b+42] == exp_radio_header[b]) ? "YES" : "NO");
+                else
+                    $display("[CHK]   %0d      0x%02h       (out of bounds)  NO", b, exp_radio_header[b]);
             end
+        end
 
+        $display("[CHK] ========================================");
             // --- Payload bytes 0-8191 (stream offset 106-9297) ---
             $display("[CHK] --- Payload verification (bytes 0-8191, 4096 words) ---");
             fail_count = 0;
@@ -471,8 +471,6 @@ module check_udp_packet_tb;
                 end
             end
             $display("[CHK] Total failing bytes: %0d out of 8192", fail_count);
-        end
-        $display("[CHK] ========================================");
 
     endtask
 
