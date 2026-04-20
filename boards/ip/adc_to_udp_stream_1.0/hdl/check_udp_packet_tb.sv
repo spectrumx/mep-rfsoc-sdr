@@ -245,12 +245,12 @@ module check_udp_packet_tb;
     // No assertions or failures yet -- purely visual sanity check.
     task verify_packet;
         input int pkt_num;
-        integer b, i;
+        integer b, i, fail_count;
         reg [7:0] exp_eth_header[0:13];
         reg [7:0] exp_ip_header[0:19];
         reg [7:0] exp_udp_header[0:7];
         reg [7:0] exp_radio_header[0:63];
-        reg [7:0] exp_payload[0:15];
+        reg [7:0] exp_payload[0:8191];
         integer ip_sum;
         reg [15:0] ip_word;
 
@@ -345,12 +345,12 @@ module check_udp_packet_tb;
         // reserved = 0
         for (i = 56; i <= 63; i = i + 1) exp_radio_header[i] = 8'h00;
 
-        // ---- Expected payload (first 16 bytes, bytes 106-121) ----
+        // ---- Expected payload (bytes 106-9297, 8192 bytes / 4096 words) ----
         // Each 2-byte word increments by 1, starting from 0x0050 for packet 0.
         // WORDS_PER_PACKET = (8306 - 106) / 2 = 4100
         // Continues across packet boundaries: pkt N starts at word (N * 4100 + 0x0050).
         // 16-bit word in little-endian: low byte first, high byte second.
-        for (i = 0; i <= 15; i = i + 1) begin
+        for (i = 0; i < 8192; i = i + 1) begin
             reg [15:0] exp_word = (pkt_num * WORDS_PER_PACKET) + 16'h0050 + (i / 2);
             exp_payload[i] = (i % 2 == 0) ? exp_word[7:0]  : exp_word[15:8];
         end
@@ -429,18 +429,48 @@ module check_udp_packet_tb;
                 end
             end
 
-            // --- First 16 payload bytes (106-121) ---
-            $display("[CHK] --- First 16 payload bytes (106-121) ---");
+            // --- Payload bytes 0-8191 (stream offset 106-9297) ---
+            $display("[CHK] --- Payload verification (bytes 0-8191, 4096 words) ---");
+            fail_count = 0;
+            // First 16 bytes
+            $display("[CHK] First 16 payload bytes (106-121):");
             $display("[CHK] Byte  Expected    Actual      Match");
             $display("[CHK] -----  ----------  ----------  -----");
             for (b = 0; b <= 15; b = b + 1) begin
-                if ((b+106) < pkt_byte_count)
+                if ((b+106) < pkt_byte_count) begin
+                    if (pkt_byte_stream[b+106] != exp_payload[b]) fail_count = fail_count + 1;
                     $display("[CHK]   %0d      0x%02h       0x%02h       %s", b,
                         exp_payload[b], pkt_byte_stream[b+106],
                         (pkt_byte_stream[b+106] == exp_payload[b]) ? "YES" : "NO");
-                else
+                end else begin
                     $display("[CHK]   %0d      0x%02h       (out of bounds)  NO", b, exp_payload[b]);
+                    fail_count = fail_count + 1;
+                end
             end
+            // Last 16 bytes
+            $display("[CHK] Last 16 payload bytes (8176-8191):");
+            $display("[CHK] Byte  Expected    Actual      Match");
+            $display("[CHK] -----  ----------  ----------  -----");
+            for (b = 8176; b <= 8191; b = b + 1) begin
+                if ((b+106) < pkt_byte_count) begin
+                    if (pkt_byte_stream[b+106] != exp_payload[b]) fail_count = fail_count + 1;
+                    $display("[CHK]   %0d      0x%02h       0x%02h       %s", b,
+                        exp_payload[b], pkt_byte_stream[b+106],
+                        (pkt_byte_stream[b+106] == exp_payload[b]) ? "YES" : "NO");
+                end else begin
+                    $display("[CHK]   %0d      0x%02h       (out of bounds)  NO", b, exp_payload[b]);
+                    fail_count = fail_count + 1;
+                end
+            end
+            // Full range check (no output, just count failures)
+            for (b = 16; b <= 8175; b = b + 1) begin
+                if ((b+106) < pkt_byte_count) begin
+                    if (pkt_byte_stream[b+106] != exp_payload[b]) fail_count = fail_count + 1;
+                end else begin
+                    fail_count = fail_count + 1;
+                end
+            end
+            $display("[CHK] Total failing bytes: %0d out of 8192", fail_count);
         end
         $display("[CHK] ========================================");
 
