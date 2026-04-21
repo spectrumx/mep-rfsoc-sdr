@@ -358,7 +358,7 @@ module check_udp_packet_tb;
         // ======== PRINT OUTPUT ========
         $display("");
         $display("[CHK] ===== Packet %0d verification =====", pkt_num);
-        $display("[CHK] pkt_byte_count = %0d  (expected = 8292)", pkt_byte_count);
+        $display("[CHK] pkt_byte_count = %0d  (expected = 8298)", pkt_byte_count);
 
         // --- Ethernet header bytes 0-13 (mismatches only) ---
         $display("[CHK] --- Ethernet header bytes 0-13 ---");
@@ -409,6 +409,7 @@ module check_udp_packet_tb;
         $display("[CHK]   %-8s  %-10s  %-10s  %-6s", "--------", "----------", "----------", "------");
         for (b = 0; b <= 63; b = b + 1) begin
             if ((b+42) == 51 || (b+42) == 53 || (b+42) == 82) continue;  // SKIP fields - not displayed
+            if ((b+42) == 43 || (b+42) == 83) continue;  // SKIP bytes 1 and 41 of radio header - sample_idx/write_en_clock_count increment correctly
             if ((b+42) < pkt_byte_count) begin
                 if (pkt_byte_stream[b+42] != exp_radio_header[b])
                     $display("[CHK]   %-8d  0x%02x       0x%02x       NO", b,

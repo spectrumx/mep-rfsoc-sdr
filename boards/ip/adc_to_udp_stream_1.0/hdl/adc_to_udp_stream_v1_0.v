@@ -103,7 +103,7 @@ module adc_to_udp_stream_v1_0 #
 
     localparam integer FIFO_LENGTH = 2048;                                  // Longer than required length (power of 2)
     localparam integer FIFO_BUFFER = FIFO_LENGTH - (PAYLOAD_WORDS/4);
-    localparam integer FIFO_READ_DELAY = 2;
+    localparam integer FIFO_READ_DELAY = 3;
 
     // Ping-pong buffer 
     wire buffer_select_s01;
@@ -871,7 +871,7 @@ module adc_to_udp_stream_v1_0 #
     assign m00_axis_tvalid = udp_packet_axis_valid && capture_enable_m00;     // Valid when we're in the middle of sending the packet
     assign m00_axis_tdata = m00_axis_tvalid ? udp_packet_axis_data : 64'h0;               // Transmit each 64-bit word of the UDP packet
     assign m00_axis_tuser = 1'b0;
-    assign m00_axis_tlast = (packet_state == FINAL_STATE + 1) && m00_axis_tvalid; // Mark the last word of the packet
+    assign m00_axis_tlast = (packet_state == FINAL_STATE) && m00_axis_tvalid; // Mark the last word of the packet
     assign m00_axis_tkeep = m00_axis_tlast ? 8'h3 : 8'hFF;
 
     assign s01_axis_tready = 1'b1;
