@@ -103,7 +103,7 @@ module adc_to_udp_stream_v1_0 #
 
     localparam integer FIFO_LENGTH = 2048;                                  // Longer than required length (power of 2)
     localparam integer FIFO_BUFFER = FIFO_LENGTH - (PAYLOAD_WORDS/4);
-    localparam integer FIFO_READ_DELAY = 3;
+    localparam integer FIFO_READ_DELAY = 2;
 
     // Ping-pong buffer 
     wire buffer_select_s01;
@@ -424,7 +424,7 @@ module adc_to_udp_stream_v1_0 #
         .READ_DATA_WIDTH(C_M00_AXIS_TDATA_WIDTH),
         .WR_DATA_COUNT_WIDTH(12),
         .RD_DATA_COUNT_WIDTH(12),
-        .PROG_FULL_THRESH(FIFO_LENGTH-FIFO_BUFFER),
+        .PROG_FULL_THRESH(FIFO_LENGTH-FIFO_BUFFER-1),
         .PROG_EMPTY_THRESH(3)
     ) fifo_0_inst (
         .rst(fifo_0_reset),
@@ -457,7 +457,7 @@ module adc_to_udp_stream_v1_0 #
         .READ_DATA_WIDTH(C_M00_AXIS_TDATA_WIDTH),
         .WR_DATA_COUNT_WIDTH(12),
         .RD_DATA_COUNT_WIDTH(12),
-        .PROG_FULL_THRESH(FIFO_LENGTH-FIFO_BUFFER),
+        .PROG_FULL_THRESH(FIFO_LENGTH-FIFO_BUFFER-1),
         .PROG_EMPTY_THRESH(3)
     ) fifo_1_inst (
         .rst(fifo_1_reset),

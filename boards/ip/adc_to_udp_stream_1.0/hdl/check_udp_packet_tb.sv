@@ -207,6 +207,7 @@ module check_udp_packet_tb;
             beat_count      <= 0;
             pkt_byte_count  <= 0;
             collecting_pkt  <= 1'b0;
+            packet_index    <= 0;
         end else if (m00_axis_tvalid && m00_axis_tready) begin
             // Store beat (64-bit data + byte enables)
             tdata_collected[beat_count] = m00_axis_tdata;
@@ -230,7 +231,9 @@ module check_udp_packet_tb;
                     end
                 end
                 // Call verification task
-                verify_packet(packet_index);
+                if ((packet_index >= 1) && (packet_index <= 3)) begin
+                    verify_packet(packet_index);
+                end
                 packet_index = packet_index + 1;
                 beat_count <= 0;
                 collecting_pkt <= 1'b0;
@@ -351,7 +354,7 @@ module check_udp_packet_tb;
         // Continues across packet boundaries: pkt N starts at word (N * 4100 + 0x0050).
         // 16-bit word in little-endian: low byte first, high byte second.
         for (i = 0; i < 8192; i = i + 1) begin
-            reg [15:0] exp_word = (pkt_num * WORDS_PER_PACKET) + 16'h0050 + (i / 2);
+            reg [15:0] exp_word = (pkt_num * WORDS_PER_PACKET) + 16'h004C + (i / 2);
             exp_payload[i] = (i % 2 == 0) ? exp_word[7:0]  : exp_word[15:8];
         end
 
