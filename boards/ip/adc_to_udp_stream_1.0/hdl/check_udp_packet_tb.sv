@@ -270,7 +270,7 @@ module check_udp_packet_tb;
         exp_ip_header[ 0] = 8'h45;  // version=4, ihl=5
         exp_ip_header[ 1] = 8'h00;  // TOS
         exp_ip_header[ 2] = 8'h20;  // IP total length MSB (8284 = 0x20C4)
-        exp_ip_header[ 3] = 8'hC4;  // IP total length LSB
+        exp_ip_header[ 3] = 8'h5C;  // IP total length LSB
         exp_ip_header[ 4] = 8'h00;  // Identification MSB
         exp_ip_header[ 5] = 8'h01;  // Identification LSB
         exp_ip_header[ 6] = 8'h40;  // Flags + Frag Offset MSB
@@ -382,7 +382,7 @@ module check_udp_packet_tb;
         $display("[CHK]   %-8s  %-10s  %-10s  %-6s", "Byte", "Expected", "Actual", "Status");
         $display("[CHK]   %-8s  %-10s  %-10s  %-6s", "--------", "----------", "----------", "------");
         for (b = 0; b <= 19; b = b + 1) begin
-            if ((b+14) == 17 || (b+14) == 25) continue;  // SKIP fields - not displayed
+            if ((b+14) == 25) continue;  // SKIP byte 25 (IP checksum LSB) - not displayed
             if ((b+14) < pkt_byte_count) begin
                 if (pkt_byte_stream[b+14] != exp_ip_header[b])
                     $display("[CHK]   %-8d  0x%02x       0x%02x       NO", b,
