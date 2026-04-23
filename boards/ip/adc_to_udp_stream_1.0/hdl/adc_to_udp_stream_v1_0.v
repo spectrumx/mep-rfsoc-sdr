@@ -424,7 +424,7 @@ module adc_to_udp_stream_v1_0 #
         .READ_DATA_WIDTH(C_M00_AXIS_TDATA_WIDTH),
         .WR_DATA_COUNT_WIDTH(12),
         .RD_DATA_COUNT_WIDTH(12),
-        .PROG_FULL_THRESH(FIFO_LENGTH-FIFO_BUFFER),
+        .PROG_FULL_THRESH(FIFO_LENGTH-FIFO_BUFFER-1),
         .PROG_EMPTY_THRESH(3)
     ) fifo_0_inst (
         .rst(fifo_0_reset),
@@ -457,7 +457,7 @@ module adc_to_udp_stream_v1_0 #
         .READ_DATA_WIDTH(C_M00_AXIS_TDATA_WIDTH),
         .WR_DATA_COUNT_WIDTH(12),
         .RD_DATA_COUNT_WIDTH(12),
-        .PROG_FULL_THRESH(FIFO_LENGTH-FIFO_BUFFER),
+        .PROG_FULL_THRESH(FIFO_LENGTH-FIFO_BUFFER-1),
         .PROG_EMPTY_THRESH(3)
     ) fifo_1_inst (
         .rst(fifo_1_reset),
@@ -871,7 +871,7 @@ module adc_to_udp_stream_v1_0 #
     assign m00_axis_tvalid = udp_packet_axis_valid && capture_enable_m00;     // Valid when we're in the middle of sending the packet
     assign m00_axis_tdata = m00_axis_tvalid ? udp_packet_axis_data : 64'h0;               // Transmit each 64-bit word of the UDP packet
     assign m00_axis_tuser = 1'b0;
-    assign m00_axis_tlast = (packet_state == FINAL_STATE + 1) && m00_axis_tvalid; // Mark the last word of the packet
+    assign m00_axis_tlast = (packet_state == FINAL_STATE) && m00_axis_tvalid; // Mark the last word of the packet
     assign m00_axis_tkeep = m00_axis_tlast ? 8'h3 : 8'hFF;
 
     assign s01_axis_tready = 1'b1;

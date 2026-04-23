@@ -21,6 +21,12 @@ boards/**/.sim/
 boards/**/project_*/        # auto-created scratch projects
 boards/**/tmp*/             # scratch temp dirs
 
+# Vivado/xsim command-line simulation (e.g. boards/ip/*/hdl/)
+xsim.dir/
+xvlog.pb
+xelab.pb
+*.wdb
+
 # Ignore temp and log files
 *.log
 *.jou
