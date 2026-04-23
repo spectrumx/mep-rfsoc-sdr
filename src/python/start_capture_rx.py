@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 
 import argparse
+import fcntl
 import json
 import logging
 import os
 import signal
+import sys
 import time
 from enum import Enum
 
@@ -21,6 +23,7 @@ MQTT_PORT = 1883
 MQTT_CMD_TOPIC = service_name + "/command"
 MQTT_TLM_TOPIC = "rfcapture/telemetry"
 LOG_DIR = os.path.join(os.sep, "var", "log", "spectrumx")
+LOCK_FILE = os.path.join(os.sep, "var", "lock", service_name + ".lock")
 
 ADC_SAMPLE_FREQUENCY = 1024  # MSps
 ADC_DECIMATION = 16
@@ -131,7 +134,7 @@ def on_message(client, userdata, msg):
                 update_adc_nco(set_value, data)
                 send_status(data)
             elif set_param == "channel":
-                data.channels = [set_value]
+                data.channels = [ch for ch in set_value.split(",")]
                 logging.info(f"Set active channels to: {data.channels}")
                 set_channel_ctrl(Ctrl.RESET, data)
                 send_status(data)
@@ -153,6 +156,7 @@ def update_adc_nco(freq_mhz, data):
         for tile, block in [(0, 0), (0, 1), (2, 0), (2, 1)]:
             data.ol.set_adc_nco(freq_mhz, ADC_SAMPLE_FREQUENCY, tile, block)
 
+        set_sample_rate((ADC_SAMPLE_FREQUENCY * 1e6) / ADC_DECIMATION, data)
         set_freq_metadata(freq_hz, data)
         logging.info(f"ADC mixer and metadata updated to {freq_mhz:.2f} MHz")
     except Exception as e:
@@ -279,7 +283,6 @@ def main(args):
 
     # Apply initial ADC config
     update_adc_nco(args.freq, data)
-    set_sample_rate((ADC_SAMPLE_FREQUENCY * 1e6) / ADC_DECIMATION, data)
 
     # Start Capture
     if not args.reset:
@@ -352,4 +355,26 @@ if __name__ == "__main__":
         choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
     )
     args = parser.parse_args()
+
+    try:
+        f = open(LOCK_FILE, "w")
+    except PermissionError:
+        print(f"Permission denied. Try running as root to write to {LOCK_FILE}")
+        sys.exit(1)
+
+    try:
+        # 2. Try to acquire an EXCLUSIVE lock (LOCK_EX) without blocking (LOCK_NB)
+        fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+        # 3. Best Practice: Write the process PID into the file for debugging
+        f.write(str(os.getpid()))
+        f.flush()
+    except BlockingIOError:
+        print("Another instance of this script is already running!")
+        sys.exit(1)
+
     main(args)
+
+    fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+    f.close()
+    os.remove(LOCK_FILE)
