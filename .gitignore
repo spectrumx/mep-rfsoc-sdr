@@ -35,3 +35,9 @@ __pycache__/
 
 # Ignore vscode files
 *.code-workspace
+
+# Ignore Python build artifacts
+dist/
+
+# Ignore generated version file
+_version.py

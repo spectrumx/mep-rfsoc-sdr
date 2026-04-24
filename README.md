@@ -22,14 +22,15 @@ cd mep-rfsoc-sdr
 
 Then install the package:
 ```bash
-pip3 install . -v
+sudo `which python` -m pip install --upgrade pip
+sudo `which python` -m pip install . -v
 ```
 
-The bitstream and hardware description files are not included in the repo by default and must be copied from the release page at: https://github.com/spectrumx/mep-rfsoc-sdr/releases
+The bitstream and hardware description files are not included in the repo by default. Upon package installation, they will be downloaded from the release page at: https://github.com/spectrumx/mep-rfsoc-sdr/releases. You may manually place these files in `src/bitstream` to use the provided files instead of downloading them.
 
 ## Receiving Data
 
-The SDR image streams captured RF data over a UDP connection. I/Q data is sent in interleaved packets with a header providing timing and frequency information. This data stream can be received and parsed by utilties in the [mep-examples](https://github.com/spectrumx/mep-examples) repository. 
+The SDR image streams captured RF data over a UDP connection. I/Q data is sent in interleaved packets with a header providing timing and frequency information. This data stream can be received and parsed by utilties in the [mep-examples](https://github.com/spectrumx/mep-examples) repository.
 
 ## Vivado build guide
 
@@ -45,7 +46,7 @@ Initialize and build the Vivado project:
 cd boards/RFSoC4x2/mep-sdr
 init_design.bash --build
 ```
-To only initialize the project, run init_design.bash without the build flag. This will create the Vivado project and instantiate the block design. The block design can then be manually opened in Vivado. 
+To only initialize the project, run init_design.bash without the build flag. This will create the Vivado project and instantiate the block design. The block design can then be manually opened in Vivado.
 
 ```bash
 vivado mep-sdr.xdc

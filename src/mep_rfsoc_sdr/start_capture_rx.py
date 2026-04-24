@@ -2,6 +2,7 @@
 
 import argparse
 import fcntl
+import importlib.resources
 import json
 import logging
 import os
@@ -11,8 +12,8 @@ import time
 from enum import Enum
 
 import paho.mqtt.client as mqtt
-import pkg_resources
-from sdr_overlay import SDROverlay
+
+from .sdr_overlay import SDROverlay
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 BITFILE_NAME = "sdr_bitstream.bit"
@@ -82,14 +83,14 @@ def signal_handler(sig, frame):
 
 
 def get_bitfile_path():
-    """Get the bitfile path using pkg_resources"""
+    """Get the bitfile path using importlib.resources"""
     try:
         # Try to get the bitfile from the installed package
-        bitfile_path = pkg_resources.resource_filename(
-            "mep_rfsoc_sdr", f"src/bitstream/{BITFILE_NAME}"
+        bitfile_path = (
+            importlib.resources.files("mep_rfsoc_sdr") / "bitstream" / BITFILE_NAME
         )
-        if os.path.exists(bitfile_path):
-            return bitfile_path
+        if bitfile_path.exists():
+            return str(bitfile_path)
     except Exception as e:
         logging.warning(f"Could not find bitfile in package: {e}")
 
@@ -219,7 +220,7 @@ def capture_next_pps(data):
     set_channel_ctrl(Ctrl.CAPTURE_NEXT_PPS, data)
 
 
-def main(args):
+def run(args):
     """
     Main function for the RX capture script
 
@@ -314,7 +315,7 @@ def main(args):
     set_channel_ctrl(Ctrl.RESET, data)
 
 
-if __name__ == "__main__":
+def main():
     for sig in [
         signal.SIGINT,
         signal.SIGTERM,
@@ -375,8 +376,12 @@ if __name__ == "__main__":
         print("Another instance of this script is already running!")
         sys.exit(1)
 
-    main(args)
+    run(args)
 
     fcntl.flock(f.fileno(), fcntl.LOCK_UN)
     f.close()
     os.remove(LOCK_FILE)
+
+
+if __name__ == "__main__":
+    main()
