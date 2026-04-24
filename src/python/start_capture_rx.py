@@ -154,7 +154,7 @@ def update_adc_nco(freq_mhz, data):
 
     try:
         for tile, block in [(0, 0), (0, 1), (2, 0), (2, 1)]:
-            data.ol.set_adc_nco(freq_mhz, ADC_SAMPLE_FREQUENCY, tile, block)
+            data.ol.set_adc_nco(-freq_mhz, ADC_SAMPLE_FREQUENCY, tile, block)
 
         set_sample_rate((ADC_SAMPLE_FREQUENCY * 1e6) / ADC_DECIMATION, data)
         set_freq_metadata(freq_hz, data)
