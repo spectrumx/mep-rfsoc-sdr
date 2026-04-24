@@ -149,6 +149,8 @@ def on_message(client, userdata, msg):
 
 def update_adc_nco(freq_mhz, data):
     freq_mhz = float(freq_mhz)  # <=== THIS LINE FIXES IT
+    # metadata only supports tuning with kHz precision, so round to kHz for actual tune
+    freq_mhz = round(freq_mhz, 3)
     freq_hz = freq_mhz * 1e6
     data.f_if_hz = freq_hz
 
@@ -174,8 +176,8 @@ def set_sample_rate(sample_rate, data):
 
 
 def set_freq_metadata(f_c_hz, data):
-    data.f_c_hz = int(float(f_c_hz))
-    f_c_khz = data.f_c_hz / 1e3
+    data.f_c_hz = float(f_c_hz)
+    f_c_khz = int(round(data.f_c_hz / 1e3))
     logging.info(f"Setting frequency metadata to: {f_c_khz} kHz")
     for ch in data.channels:
         getattr(data.ol, f"adc_to_udp_stream_{ch}").register_map.FREQUENCY_IDX = f_c_khz
