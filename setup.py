@@ -5,7 +5,7 @@ from distutils.dir_util import copy_tree
 from setuptools import setup, find_packages
 
 module_name = "mep_rfsoc_sdr"
-version = "0.0.1"
+version = "0.0.2"
 board = os.environ.get('BOARD', 'RFSoC4x2')  # Default to RFSoC4x2
 repo_board_dir = f'boards/{board}/{module_name.replace("_", "-")}'
 
