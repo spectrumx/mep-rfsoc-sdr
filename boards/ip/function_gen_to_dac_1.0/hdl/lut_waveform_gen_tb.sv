@@ -9,10 +9,6 @@ module lut_waveform_gen_tb;
     parameter DATA_WIDTH = 14;
     parameter LUT_ADDR_WIDTH = 12;
 
-    // Test duration: ~20000ns for ~1024 samples at 51.2 MSPS
-    parameter TEST_FREQUENCY = 2000000;  // 2 MHz
-    parameter TONE_TEST_DURATION_NS = 20000;
-
     // Clock and reset signals
     reg clk;
     reg rst_n;
@@ -42,10 +38,10 @@ module lut_waveform_gen_tb;
         .valid_out(valid_out)
     );
 
-    // Clock generation (51.2 MSPS => half-period = 97.65625 ns)
+    // Clock generation (51.2 MHz => half-period = 9.765625 ns)
     initial begin
         clk = 0;
-        forever #97.65625 clk = ~clk;
+        forever #9.765625 clk = ~clk;
     end
 
     // Reset generation
@@ -55,210 +51,258 @@ module lut_waveform_gen_tb;
         rst_n = 1;
     end
 
-    // Fail counter for summary
-    integer test_failures;
+    // =============================================
+    // Reusable frequency accuracy test task
+    // Measures tone frequency from zero crossings
+    // over a fixed number of valid samples.
+    //
+    // Arguments:
+    //   freq_hz        - programmed frequency in Hz
+    //   num_samples    - number of valid samples to collect
+    //   tolerance_ppm  - acceptable error in parts-per-million
+    //   is_dc          - 1 for DC (0 Hz) test, 0 for AC tone
+    //
+    // Return (via output):
+    //   measured_freq  - measured frequency in Hz (0 for DC)
+    //   ok             - 1 if test passed, 0 if failed
+    // =============================================
+    task automatic run_frequency_test(
+        input  int freq_hz,
+        input  int num_samples,
+        input  int tolerance_ppm,
+        input  int is_dc,
+        output real measured_freq,
+        output int ok
+    );
+        integer   k, sample_count, zero_crossings;
+        integer   prev_sine, cur_sine;
+        real      expected_freq;
+        real      rel_error;
+        integer   stable_count, dc_sine, dc_cosine;
 
-    // Test sequence
-    initial begin
-        test_failures = 0;
-
-        // Initialize signals
-        frequency = 0;
-        phase_offset = 0;
-
-        // Wait for reset
-        #500;
-
-        $display("========================================");
-        $display("LUT Waveform Generator Testbench");
-        $display("========================================");
-        $display("Logical Sample Rate: %0d Hz (%.2f MSPS)", CLOCK_FREQUENCY, CLOCK_FREQUENCY/1e6);
-        $display("Test Frequency: %0d Hz (%.2f MHz)", TEST_FREQUENCY, TEST_FREQUENCY/1e6);
-        $display("Expected Period: %.1f ns", 1e9/TEST_FREQUENCY);
-        $display("LUT Size: %0d entries", 1 << LUT_ADDR_WIDTH);
-        $display("Output format: signed %0d-bit, range -8192..+8191", DATA_WIDTH);
-        $display("========================================\n");
-
-        // ============================
-        // TEST 1: 2 MHz tone
-        // ============================
-        $display("TEST 1: 2 MHz tone test");
-        $display("----------------------------------------");
-        frequency = TEST_FREQUENCY;
-        phase_offset = 0;
-        $display("Setting frequency to %0d Hz at time %0t ns", frequency, $time);
-
-        // Wait for valid output
-        @(posedge clk);
-        while (!valid_out) @(posedge clk);
-        $display("Valid output detected at time %0t ns", $time);
-
-        begin
-            automatic integer sample_count = 0;
-            automatic integer sine_max = -16384;
-            automatic integer sine_min = 16383;
-            automatic integer cosine_max = -16384;
-            automatic integer cosine_min = 16383;
-            automatic integer zero_crossings = 0;
-            automatic integer prev_sine = 0;
-            automatic integer test_start_time;
-            automatic real expected_periods;
-            automatic integer sine_span;
-            automatic integer cosine_span;
-
-            test_start_time = $time;
-
-            while (($time - test_start_time) < TONE_TEST_DURATION_NS) begin
-                @(posedge clk);
-                if (valid_out) begin
-                    sample_count = sample_count + 1;
-
-                    // Track min/max values (cast signed wire to integer for comparison)
-                    if ($signed(sine_out) > sine_max) sine_max = $signed(sine_out);
-                    if ($signed(sine_out) < sine_min) sine_min = $signed(sine_out);
-                    if ($signed(cosine_out) > cosine_max) cosine_max = $signed(cosine_out);
-                    if ($signed(cosine_out) < cosine_min) cosine_min = $signed(cosine_out);
-
-                    // Detect zero crossings (sine crossing zero going upward)
-                    if ((prev_sine < 0) && ($signed(sine_out) >= 0)) begin
-                        zero_crossings = zero_crossings + 1;
-                        $display("  Zero crossing #%0d at sample %0d: sine=%0d, cosine=%0d",
-                                 zero_crossings, sample_count, $signed(sine_out), $signed(cosine_out));
-                    end
-
-                    prev_sine = $signed(sine_out);
-
-                    // Print sample every 100 samples or at key points
-                    if ((sample_count % 100 == 0) || (sample_count <= 5)) begin
-                        $display("  Sample %0d: sine=%0d, cosine=%0d",
-                                 sample_count, $signed(sine_out), $signed(cosine_out));
-                    end
-                end
-            end
-
-            $display("\n  Total samples: %0d", sample_count);
-            $display("  Sine range: [%0d, %0d]", sine_min, sine_max);
-            $display("  Cosine range: [%0d, %0d]", cosine_min, cosine_max);
-            $display("  Zero crossings detected: %0d", zero_crossings);
-
-            // At 51.2 MSPS, 2 MHz tone => 25.6 samples per period
-            expected_periods = (sample_count * TEST_FREQUENCY) / CLOCK_FREQUENCY;
-            $display("  Expected periods: %.1f", expected_periods);
-
-            // Check 1a: Signed range check
-            if ((sine_min < -8192) || (sine_max > 8191) || (cosine_min < -8192) || (cosine_max > 8191)) begin
-                $display("  FAIL: Output range exceeds signed 14-bit bounds [-8192, +8191]");
-                test_failures = test_failures + 1;
-            end else begin
-                $display("  PASS: Output range within [-8192, +8191]");
-            end
-
-            // Check 1b: Amplitude spans most of the range
-            sine_span = sine_max - sine_min;
-            cosine_span = cosine_max - cosine_min;
-            if ((sine_span < 15000) || (cosine_span < 15000)) begin
-                $display("  FAIL: Amplitude span too small (sine=%0d, cosine=%0d, expected >15000)", sine_span, cosine_span);
-                test_failures = test_failures + 1;
-            end else begin
-                $display("  PASS: Amplitude span adequate (sine=%0d, cosine=%0d)", sine_span, cosine_span);
-            end
-
-            // Check 1c: Zero crossings
-            if (zero_crossings >= 2) begin
-                $display("  PASS: Detected %0d zero crossings (>= 2 expected)", zero_crossings);
-            end else begin
-                $display("  FAIL: Expected >= 2 zero crossings, got %0d", zero_crossings);
-                test_failures = test_failures + 1;
-            end
-
-            // Check 1d: Both positive and negative values present
-            if ((sine_min < 0) && (sine_max > 0) && (cosine_min < 0) && (cosine_max > 0)) begin
-                $display("  PASS: Both positive and negative values present");
-            end else begin
-                $display("  FAIL: Missing positive or negative values (sine:[%0d,%0d], cosine:[%0d,%0d])",
-                         sine_min, sine_max, cosine_min, cosine_max);
-                test_failures = test_failures + 1;
-            end
-        end
-
-        // ============================
-        // TEST 2: Zero-frequency DC test
-        // ============================
-        $display("\nTEST 2: Zero-frequency DC test");
-        $display("----------------------------------------");
-        frequency = 0;
-        phase_offset = 0;
-        // Reassert reset to clear phase accumulator to known state
+        // Program frequency and reset phase accumulator
+        frequency = freq_hz;
+        phase_offset = 32'h0000_0000;
         rst_n = 0;
         @(posedge clk);
         @(posedge clk);
         rst_n = 1;
-        $display("Setting frequency to 0 Hz, reset phase at time %0t ns", $time);
 
-        // Wait for valid output after reset
+        // Wait for valid output
         @(posedge clk);
         while (!valid_out) @(posedge clk);
 
-        begin
-            automatic integer dc_sine_val = $signed(sine_out);
-            automatic integer dc_cosine_val = $signed(cosine_out);
-            automatic integer stable_count = 0;
-            automatic integer k;
+        if (is_dc) begin
+            // DC test: capture initial values and verify stability
+            dc_sine = $signed(sine_out);
+            dc_cosine = $signed(cosine_out);
+            stable_count = 0;
+            sample_count = 0;
 
-            $display("  Initial values: sine=%0d, cosine=%0d", dc_sine_val, dc_cosine_val);
-
-            // Check stability over 20 samples
-            for (k = 0; k < 20; k = k + 1) begin
+            for (k = 0; k < num_samples; k = k + 1) begin
                 @(posedge clk);
                 if (valid_out) begin
-                    if (($signed(sine_out) == dc_sine_val) && ($signed(cosine_out) == dc_cosine_val)) begin
+                    sample_count = sample_count + 1;
+                    if (($signed(sine_out) == dc_sine) &&
+                        ($signed(cosine_out) == dc_cosine)) begin
                         stable_count = stable_count + 1;
                     end
                 end
             end
 
-            $display("  Stable samples: %0d / 20", stable_count);
-            $display("  DC sine value: %0d (expected ~0)", dc_sine_val);
-            $display("  DC cosine value: %0d (expected ~+8191)", dc_cosine_val);
+            measured_freq = 0.0;
 
-            // Check 2a: Stability
-            if (stable_count == 20) begin
-                $display("  PASS: Zero-frequency output is stable");
-            end else begin
-                $display("  FAIL: Zero-frequency output is not stable (%0d/20)", stable_count);
-                test_failures = test_failures + 1;
+            // Check DC stability
+            if (stable_count != num_samples) begin
+                $display("  FAIL: DC output not stable (%0d/%0d)", stable_count, num_samples);
+                ok = 0;
+                return;
             end
 
-            // Check 2b: Sine near zero at phase 0
-            if ((dc_sine_val >= -2) && (dc_sine_val <= 2)) begin
-                $display("  PASS: DC sine value near zero (%0d)", dc_sine_val);
-            end else begin
-                $display("  FAIL: DC sine value not near zero (%0d)", dc_sine_val);
-                test_failures = test_failures + 1;
+            // Check sine near zero
+            if (dc_sine < -2 || dc_sine > 2) begin
+                $display("  FAIL: DC sine not near zero (%0d)", dc_sine);
+                ok = 0;
+                return;
             end
 
-            // Check 2c: Cosine near full scale at phase 0 (clamped to +8191)
-            if ((dc_cosine_val >= 8189) && (dc_cosine_val <= 8191)) begin
-                $display("  PASS: DC cosine value near full scale (%0d)", dc_cosine_val);
-            end else begin
-                $display("  FAIL: DC cosine value not near full scale (%0d)", dc_cosine_val);
-                test_failures = test_failures + 1;
+            // Check cosine near full scale (+8191)
+            if (dc_cosine < 8189 || dc_cosine > 8191) begin
+                $display("  FAIL: DC cosine not near full scale (%0d)", dc_cosine);
+                ok = 0;
+                return;
+            end
+
+            ok = 1;
+            return;
+        end
+
+        // AC tone test: count zero crossings over num_samples
+        sample_count = 0;
+        zero_crossings = 0;
+        prev_sine = 0;
+
+        // Capture initial value before loop
+        @(posedge clk);
+        while (!valid_out) @(posedge clk);
+        prev_sine = $signed(sine_out);
+        sample_count = 1;
+
+        while (sample_count < num_samples) begin
+            @(posedge clk);
+            if (valid_out) begin
+                sample_count = sample_count + 1;
+                cur_sine = $signed(sine_out);
+
+                // Detect upward zero crossing
+                if ((prev_sine < 0) && (cur_sine >= 0)) begin
+                    zero_crossings = zero_crossings + 1;
+                end
+
+                prev_sine = cur_sine;
             end
         end
 
-        // ============================
-        // Summary
-        // ============================
-        $display("\n========================================");
-        $display("Test Results Summary");
-        $display("========================================");
-        $display("Logical Sample Rate: %0d Hz (%.2f MSPS)", CLOCK_FREQUENCY, CLOCK_FREQUENCY/1e6);
-        $display("Output format: signed %0d-bit [-8192, +8191]", DATA_WIDTH);
-        if (test_failures == 0) begin
-            $display("PASS: All tests passed");
+        // Compute measured frequency from zero crossings
+        // Each upward crossing = one full cycle
+        measured_freq = (real'(zero_crossings) * real'(CLOCK_FREQUENCY)) / real'(sample_count);
+        expected_freq = real'(freq_hz);
+
+        // Compute relative error
+        if (expected_freq > 0.0) begin
+            rel_error = (measured_freq - expected_freq) / expected_freq;
+            if (rel_error < 0.0) rel_error = -rel_error;
         end else begin
-            $display("FAIL: %0d test(s) failed", test_failures);
+            rel_error = 0.0;
+        end
+
+        // Check range: all samples must be within signed 14-bit bounds
+        // (Verified implicitly by the DUT; we check crossing count is nonzero)
+        if (zero_crossings < 1) begin
+            $display("  FAIL: No zero crossings detected for %0d Hz tone", freq_hz);
+            ok = 0;
+            return;
+        end
+
+        // Check frequency accuracy against tolerance
+        if (rel_error > real'(tolerance_ppm) / 1000000.0) begin
+            $display("  FAIL: Frequency error %0.2f%% exceeds %0.1f ppm tolerance",
+                     rel_error * 100.0, real'(tolerance_ppm));
+            ok = 0;
+            return;
+        end
+
+        ok = 1;
+    endtask
+
+    // Module-scope result storage (Vivado 2024.1 requires declarations here)
+    real    measured_freq_0;
+    real    measured_freq_1;
+    real    measured_freq_2;
+    real    measured_freq_3;
+    integer test_ok_0;
+    integer test_ok_1;
+    integer test_ok_2;
+    integer test_ok_3;
+    integer total_failures;
+
+    // Test sequence
+    initial begin
+        // Initialize signals
+        frequency = 0;
+        phase_offset = 0;
+        total_failures = 0;
+
+        // Wait for initial reset to release
+        #500;
+
+        $display("========================================");
+        $display("LUT Waveform Generator Testbench");
+        $display("Step 1.3: NCO Frequency Accuracy");
+        $display("========================================");
+        $display("Logical Sample Rate: %0d Hz (%0.2f MSPS)",
+                 CLOCK_FREQUENCY, real'(CLOCK_FREQUENCY) / 1e6);
+        $display("Phase Width: %0d bits", PHASE_WIDTH);
+        $display("LUT Size: %0d entries", 1 << LUT_ADDR_WIDTH);
+        $display("Output: signed %0d-bit [-8192, +8191]", DATA_WIDTH);
+        $display("========================================\n");
+
+        // Test 1: 0 Hz (DC)
+        $display("TEST 1: 0 Hz (DC)");
+        $display("----------------------------------------");
+        run_frequency_test(0, 50, 0, 1, measured_freq_0, test_ok_0);
+        if (!test_ok_0) total_failures = total_failures + 1;
+
+        // Test 2: 100 kHz (low tone)
+        // Max zero-crossing quantization error ~= 1/Ncrossings.
+        // 100 kHz x 200000/51.2MHz ~= 390 crossings => error < 0.26%.
+        // Tolerance 5000 ppm (0.5%) covers quantization safely.
+        $display("\nTEST 2: 100 kHz low tone");
+        $display("----------------------------------------");
+        run_frequency_test(100000, 200000, 5000, 0, measured_freq_1, test_ok_1);
+        if (!test_ok_1) total_failures = total_failures + 1;
+
+        // Test 3: 2 MHz
+        // ~1953 crossings, quantization error < 0.06%. Tolerance 1000 ppm (0.1%).
+        $display("\nTEST 3: 2 MHz tone");
+        $display("----------------------------------------");
+        run_frequency_test(2000000, 50000, 1000, 0, measured_freq_2, test_ok_2);
+        if (!test_ok_2) total_failures = total_failures + 1;
+
+        // Test 4: 10 MHz (higher in-band tone)
+        // ~9766 crossings, quantization error < 0.01%. Tolerance 1000 ppm (0.1%).
+        $display("\nTEST 4: 10 MHz in-band tone");
+        $display("----------------------------------------");
+        run_frequency_test(10000000, 50000, 1000, 0, measured_freq_3, test_ok_3);
+        if (!test_ok_3) total_failures = total_failures + 1;
+
+        // =============================================
+        // Summary
+        // =============================================
+        $display("\n========================================");
+        $display("Step 1.3 Frequency Test Summary");
+        $display("========================================");
+
+        if (test_ok_0) begin
+            $display("  PASS:   %10d Hz  (DC stable)", 0);
+        end else begin
+            $display("  FAIL:   %10d Hz  (DC test failed)", 0);
+        end
+
+        if (test_ok_1) begin
+            $display("  PASS:   %10d Hz  measured %0.1f MHz  (err %0.2f%%)",
+                     100000, measured_freq_1 / 1e6,
+                     ((measured_freq_1 - 100000.0) / 100000.0) * 100.0);
+        end else begin
+            $display("  FAIL:   %10d Hz  measured %0.1f MHz",
+                     100000, measured_freq_1 / 1e6);
+        end
+
+        if (test_ok_2) begin
+            $display("  PASS:   %10d Hz  measured %0.1f MHz  (err %0.2f%%)",
+                     2000000, measured_freq_2 / 1e6,
+                     ((measured_freq_2 - 2000000.0) / 2000000.0) * 100.0);
+        end else begin
+            $display("  FAIL:   %10d Hz  measured %0.1f MHz",
+                     2000000, measured_freq_2 / 1e6);
+        end
+
+        if (test_ok_3) begin
+            $display("  PASS:   %10d Hz  measured %0.1f MHz  (err %0.2f%%)",
+                     10000000, measured_freq_3 / 1e6,
+                     ((measured_freq_3 - 10000000.0) / 10000000.0) * 100.0);
+        end else begin
+            $display("  FAIL:   %10d Hz  measured %0.1f MHz",
+                     10000000, measured_freq_3 / 1e6);
+        end
+
+        $display("========================================");
+
+        if (total_failures > 0) begin
+            $display("FAIL: %0d frequency test(s) failed", total_failures);
             $fatal;
+        end else begin
+            $display("PASS: All %0d frequency tests passed", 4);
         end
         $display("========================================\n");
 

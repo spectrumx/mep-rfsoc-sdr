@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<wave_config>
+   <wave_state>
+   </wave_state>
+   <db_ref_list>
+      <db_ref path="sim_lut_waveform_gen.wdb" id="1">
+         <top_modules>
+            <top_module name="lut_waveform_gen_tb" />
+         </top_modules>
+      </db_ref>
+   </db_ref_list>
+   <zoom_setting>
+      <ZoomStartTime time="0 ps"></ZoomStartTime>
+      <ZoomEndTime time="9 ps"></ZoomEndTime>
+      <Cursor1Time time="0 ps"></Cursor1Time>
+   </zoom_setting>
+   <column_width_setting>
+      <NameColumnWidth column_width="266"></NameColumnWidth>
+      <ValueColumnWidth column_width="66"></ValueColumnWidth>
+   </column_width_setting>
+   <WVObjectSize size="8" />
+   <wvobject type="logic" fp_name="/lut_waveform_gen_tb/clk">
+      <obj_property name="ElementShortName">clk</obj_property>
+      <obj_property name="ObjectShortName">clk</obj_property>
+   </wvobject>
+   <wvobject type="logic" fp_name="/lut_waveform_gen_tb/rst_n">
+      <obj_property name="ElementShortName">rst_n</obj_property>
+      <obj_property name="ObjectShortName">rst_n</obj_property>
+   </wvobject>
+   <wvobject type="logic" fp_name="/lut_waveform_gen_tb/valid_out">
+      <obj_property name="ElementShortName">valid_out</obj_property>
+      <obj_property name="ObjectShortName">valid_out</obj_property>
+   </wvobject>
+   <wvobject type="array" fp_name="/lut_waveform_gen_tb/sine_out">
+      <obj_property name="ElementShortName">sine_out[13:0]</obj_property>
+      <obj_property name="ObjectShortName">sine_out[13:0]</obj_property>
+   </wvobject>
+   <wvobject type="array" fp_name="/lut_waveform_gen_tb/cosine_out">
+      <obj_property name="ElementShortName">cosine_out[13:0]</obj_property>
+      <obj_property name="ObjectShortName">cosine_out[13:0]</obj_property>
+   </wvobject>
+   <wvobject type="array" fp_name="/lut_waveform_gen_tb/frequency">
+      <obj_property name="ElementShortName">frequency[31:0]</obj_property>
+      <obj_property name="ObjectShortName">frequency[31:0]</obj_property>
+   </wvobject>
+   <wvobject type="array" fp_name="/lut_waveform_gen_tb/phase_offset">
+      <obj_property name="ElementShortName">phase_offset[31:0]</obj_property>
+      <obj_property name="ObjectShortName">phase_offset[31:0]</obj_property>
+   </wvobject>
+   <wvobject type="array" fp_name="/lut_waveform_gen_tb/uut/lut_addr">
+      <obj_property name="ElementShortName">lut_addr[11:0]</obj_property>
+      <obj_property name="ObjectShortName">lut_addr[11:0]</obj_property>
+   </wvobject>
+</wave_config>

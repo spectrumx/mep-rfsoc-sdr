@@ -35,7 +35,8 @@ module lut_waveform_gen #
     // Phase offset (32-bit, normalized to 2^PHASE_WIDTH)
     input wire [PHASE_WIDTH-1:0] phase_offset,
     
-    // Output sine and cosine values (signed, DATA_WIDTH bits, range -8192 to +8191)
+    // Output sine and cosine values (signed, DATA_WIDTH bits)
+    // Range: -8192 to +8191. Positive peak clamped to +8191, negative peak to -8192.
     output reg signed [DATA_WIDTH-1:0] sine_out,
     output reg signed [DATA_WIDTH-1:0] cosine_out,
     
@@ -79,6 +80,13 @@ module lut_waveform_gen #
     // Lookup table for sine and cosine values
     // Table contains 2^LUT_ADDR_WIDTH entries
     // Each entry is a signed DATA_WIDTH-bit value ranging from -8192 to +8191
+    //
+    // Endpoint behavior:
+    //   - Positive peak (cos(0), sin(π/2)): clamped to +8191 (max signed 14-bit)
+    //   - Negative peak (cos(π), sin(3π/2)): clamped to -8192 (min signed 14-bit)
+    //   - cos(0) = 8192 mathematically, clamped to +8191 to fit signed 14-bit range
+    //   - LUT quantization means most indices never hit exact ±8192; clamping only
+    //     affects index 0 for cosine and index 3072 for cosine (π radians)
     reg signed [DATA_WIDTH-1:0] sine_lut [0:(1<<LUT_ADDR_WIDTH)-1];
     reg signed [DATA_WIDTH-1:0] cosine_lut [0:(1<<LUT_ADDR_WIDTH)-1];
     
