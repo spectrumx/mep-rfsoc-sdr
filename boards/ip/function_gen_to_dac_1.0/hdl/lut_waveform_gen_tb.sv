@@ -195,6 +195,138 @@ module lut_waveform_gen_tb;
         ok = 1;
     endtask
 
+    // =============================================
+    // Reusable phase offset test task
+    // Verifies sine/cosine quadrant and sign at a
+    // given phase offset using DC (0 Hz) output.
+    //
+    // Arguments:
+    //   phase_off        - 32-bit phase offset value
+    //   label_deg        - human-readable degree label
+    //   exp_sine_sign    - expected sine sign: +1, -1, or 0 (near-zero)
+    //   exp_cosine_sign  - expected cosine sign: +1, -1, or 0 (near-zero)
+    //   exp_sine_fs      - 1 if sine expected at full scale, 0 if near zero
+    //   exp_cosine_fs    - 1 if cosine expected at full scale, 0 if near zero
+    //
+    // Return (via output):
+    //   ok               - 1 if test passed, 0 if failed
+    // =============================================
+    task automatic run_phase_test(
+        input  logic [31:0] phase_off,
+        input  int          label_deg,
+        input  int          exp_sine_sign,
+        input  int          exp_cosine_sign,
+        input  int          exp_sine_fs,
+        input  int          exp_cosine_fs,
+        output int          ok
+    );
+        integer   k, stable_count;
+        integer   dc_sine, dc_cosine;
+        integer   sine_in_range, cosine_in_range;
+
+        // Program phase offset at 0 Hz and reset
+        frequency = 0;
+        phase_offset = phase_off;
+        rst_n = 0;
+        @(posedge clk);
+        @(posedge clk);
+        rst_n = 1;
+
+        // Wait for valid output, then skip one pipeline cycle
+        // so lut_addr_reg has been updated from the new phase_offset.
+        @(posedge clk);
+        while (!valid_out) @(posedge clk);
+        @(posedge clk);
+        while (!valid_out) @(posedge clk);
+
+        dc_sine   = $signed(sine_out);
+        dc_cosine = $signed(cosine_out);
+
+        $display("  Phase %0d deg (0x%08h): sine=%0d, cosine=%0d",
+                 label_deg, phase_off, dc_sine, dc_cosine);
+
+        // Check output range
+        sine_in_range   = (dc_sine   >= -8192 && dc_sine   <= 8191);
+        cosine_in_range = (dc_cosine >= -8192 && dc_cosine <= 8191);
+
+        if (!sine_in_range || !cosine_in_range) begin
+            $display("  FAIL: Out-of-range sample (sine=%0d, cosine=%0d)",
+                     dc_sine, dc_cosine);
+            ok = 0;
+            return;
+        end
+
+        // Check sine value
+        if (exp_sine_fs) begin
+            // Expected at full scale
+            if (exp_sine_sign > 0) begin
+                if (dc_sine < 8189) begin
+                    $display("  FAIL: Sine not near +FS (got %0d)", dc_sine);
+                    ok = 0;
+                    return;
+                end
+            end else begin
+                // exp_sine_sign < 0
+                if (dc_sine > -8190) begin
+                    $display("  FAIL: Sine not near -FS (got %0d)", dc_sine);
+                    ok = 0;
+                    return;
+                end
+            end
+        end else begin
+            // Expected near zero
+            if (dc_sine < -2 || dc_sine > 2) begin
+                $display("  FAIL: Sine not near zero (got %0d)", dc_sine);
+                ok = 0;
+                return;
+            end
+        end
+
+        // Check cosine value
+        if (exp_cosine_fs) begin
+            if (exp_cosine_sign > 0) begin
+                if (dc_cosine < 8189) begin
+                    $display("  FAIL: Cosine not near +FS (got %0d)", dc_cosine);
+                    ok = 0;
+                    return;
+                end
+            end else begin
+                // exp_cosine_sign < 0
+                if (dc_cosine > -8190) begin
+                    $display("  FAIL: Cosine not near -FS (got %0d)", dc_cosine);
+                    ok = 0;
+                    return;
+                end
+            end
+        end else begin
+            if (dc_cosine < -2 || dc_cosine > 2) begin
+                $display("  FAIL: Cosine not near zero (got %0d)", dc_cosine);
+                ok = 0;
+                return;
+            end
+        end
+
+        // Verify stability over 20 additional samples
+        stable_count = 0;
+        for (k = 0; k < 20; k = k + 1) begin
+            @(posedge clk);
+            if (valid_out) begin
+                if (($signed(sine_out)   == dc_sine) &&
+                    ($signed(cosine_out) == dc_cosine)) begin
+                    stable_count = stable_count + 1;
+                end
+            end
+        end
+
+        if (stable_count != 20) begin
+            $display("  FAIL: Output not stable (%0d/20)", stable_count);
+            ok = 0;
+            return;
+        end
+
+        ok = 1;
+    endtask
+
     // Module-scope result storage (Vivado 2024.1 requires declarations here)
     real    measured_freq_0;
     real    measured_freq_1;
@@ -204,6 +336,10 @@ module lut_waveform_gen_tb;
     integer test_ok_1;
     integer test_ok_2;
     integer test_ok_3;
+    integer phase_ok_0;
+    integer phase_ok_90;
+    integer phase_ok_180;
+    integer phase_ok_270;
     integer total_failures;
 
     // Test sequence
@@ -218,7 +354,7 @@ module lut_waveform_gen_tb;
 
         $display("========================================");
         $display("LUT Waveform Generator Testbench");
-        $display("Step 1.3: NCO Frequency Accuracy");
+        $display("Steps 1.3 + 1.4: Frequency + Phase Offset");
         $display("========================================");
         $display("Logical Sample Rate: %0d Hz (%0.2f MSPS)",
                  CLOCK_FREQUENCY, real'(CLOCK_FREQUENCY) / 1e6);
@@ -298,11 +434,78 @@ module lut_waveform_gen_tb;
 
         $display("========================================");
 
+        // =============================================
+        // Phase offset tests (Step 1.4)
+        // =============================================
+        $display("\n========================================");
+        $display("Step 1.4: Phase Offset Tests");
+        $display("========================================");
+
+        // 0 deg: sin=0, cos=+FS
+        $display("\nPhase 0 deg (expect sine~0, cosine~+8191):");
+        $display("----------------------------------------");
+        run_phase_test(32'h00000000, 0, 0, 1, 0, 1, phase_ok_0);
+        if (!phase_ok_0) total_failures = total_failures + 1;
+
+        // 90 deg: sin=+FS, cos=0
+        $display("\nPhase 90 deg (expect sine~+8191, cosine~0):");
+        $display("----------------------------------------");
+        run_phase_test(32'h40000000, 90, 1, 0, 1, 0, phase_ok_90);
+        if (!phase_ok_90) total_failures = total_failures + 1;
+
+        // 180 deg: sin=0, cos=-FS
+        $display("\nPhase 180 deg (expect sine~0, cosine~-8192):");
+        $display("----------------------------------------");
+        run_phase_test(32'h80000000, 180, 0, -1, 0, 1, phase_ok_180);
+        if (!phase_ok_180) total_failures = total_failures + 1;
+
+        // 270 deg: sin=-FS, cos=0
+        $display("\nPhase 270 deg (expect sine~-8192, cosine~0):");
+        $display("----------------------------------------");
+        run_phase_test(32'hC0000000, 270, -1, 0, 1, 0, phase_ok_270);
+        if (!phase_ok_270) total_failures = total_failures + 1;
+
+        // =============================================
+        // Phase offset summary
+        // =============================================
+        $display("\n========================================");
+        $display("Step 1.4 Phase Offset Summary");
+        $display("========================================");
+
+        if (phase_ok_0)
+            $display("  PASS:  0 degrees  (sine~0, cosine~+FS)");
+        else
+            $display("  FAIL:  0 degrees");
+
+        if (phase_ok_90)
+            $display("  PASS:  90 degrees (sine~+FS, cosine~0)");
+        else
+            $display("  FAIL:  90 degrees");
+
+        if (phase_ok_180)
+            $display("  PASS:  180 degrees (sine~0, cosine~-FS)");
+        else
+            $display("  FAIL:  180 degrees");
+
+        if (phase_ok_270)
+            $display("  PASS:  270 degrees (sine~-FS, cosine~0)");
+        else
+            $display("  FAIL:  270 degrees");
+
+        $display("========================================");
+
+        // =============================================
+        // Grand summary
+        // =============================================
+        $display("\n========================================");
+        $display("Grand Summary (Steps 1.3 + 1.4)");
+        $display("========================================");
+
         if (total_failures > 0) begin
-            $display("FAIL: %0d frequency test(s) failed", total_failures);
+            $display("FAIL: %0d test(s) failed", total_failures);
             $fatal;
         end else begin
-            $display("PASS: All %0d frequency tests passed", 4);
+            $display("PASS: All frequency and phase tests passed");
         end
         $display("========================================\n");
 

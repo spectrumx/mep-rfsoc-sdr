@@ -10,9 +10,9 @@
       </db_ref>
    </db_ref_list>
    <zoom_setting>
-      <ZoomStartTime time="0 ps"></ZoomStartTime>
-      <ZoomEndTime time="9 ps"></ZoomEndTime>
-      <Cursor1Time time="0 ps"></Cursor1Time>
+      <ZoomStartTime time="0.000 ns"></ZoomStartTime>
+      <ZoomEndTime time="1,161.001 ns"></ZoomEndTime>
+      <Cursor1Time time="205.086 ns"></Cursor1Time>
    </zoom_setting>
    <column_width_setting>
       <NameColumnWidth column_width="266"></NameColumnWidth>
@@ -34,10 +34,15 @@
    <wvobject type="array" fp_name="/lut_waveform_gen_tb/sine_out">
       <obj_property name="ElementShortName">sine_out[13:0]</obj_property>
       <obj_property name="ObjectShortName">sine_out[13:0]</obj_property>
+      <obj_property name="Radix">UNSIGNEDDECRADIX</obj_property>
    </wvobject>
    <wvobject type="array" fp_name="/lut_waveform_gen_tb/cosine_out">
       <obj_property name="ElementShortName">cosine_out[13:0]</obj_property>
       <obj_property name="ObjectShortName">cosine_out[13:0]</obj_property>
+      <obj_property name="Radix">UNSIGNEDDECRADIX</obj_property>
+      <obj_property name="radix_realType">SIGNEDFIXEDPOINTRADIX</obj_property>
+      <obj_property name="radix_fractionWidth">14</obj_property>
+      <obj_property name="radix_otherWidth">0</obj_property>
    </wvobject>
    <wvobject type="array" fp_name="/lut_waveform_gen_tb/frequency">
       <obj_property name="ElementShortName">frequency[31:0]</obj_property>
