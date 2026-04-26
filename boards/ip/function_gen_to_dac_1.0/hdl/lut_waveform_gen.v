@@ -13,8 +13,8 @@
 
 module lut_waveform_gen #
 (
-    // Clock frequency in Hz (default 156.25 MHz = 156250000)
-    parameter integer CLOCK_FREQUENCY = 156250000,
+    // Logical sample rate (NCO clock) in Hz (default 51.2 MSPS = 51200000)
+    parameter integer CLOCK_FREQUENCY = 51200000,
     
     // Phase accumulator width (determines frequency resolution)
     parameter integer PHASE_WIDTH = 32,
@@ -35,9 +35,9 @@ module lut_waveform_gen #
     // Phase offset (32-bit, normalized to 2^PHASE_WIDTH)
     input wire [PHASE_WIDTH-1:0] phase_offset,
     
-    // Output sine and cosine values (unsigned, DATA_WIDTH bits, range 0 to 16383)
-    output reg [DATA_WIDTH-1:0] sine_out,
-    output reg [DATA_WIDTH-1:0] cosine_out,
+    // Output sine and cosine values (signed, DATA_WIDTH bits, range -8192 to +8191)
+    output reg signed [DATA_WIDTH-1:0] sine_out,
+    output reg signed [DATA_WIDTH-1:0] cosine_out,
     
     // Output valid signal
     output reg valid_out
@@ -66,7 +66,7 @@ module lut_waveform_gen #
     end
     
     // Phase with offset
-    // phase=0 corresponds to sin(0)=0, giving sine_out=8192 (center value)
+    // phase=0 corresponds to sin(0)=0 (sine_out=0), cos(0)=1 (cosine_out≈+8191)
     wire [PHASE_WIDTH-1:0] phase_unsigned;
     assign phase_unsigned = phase_accum + phase_offset;
     
@@ -76,12 +76,11 @@ module lut_waveform_gen #
     wire [LUT_ADDR_WIDTH-1:0] lut_addr;
     assign lut_addr = phase_unsigned[PHASE_WIDTH-1:PHASE_WIDTH-LUT_ADDR_WIDTH];
     
-    // Lookup table for sine values
+    // Lookup table for sine and cosine values
     // Table contains 2^LUT_ADDR_WIDTH entries
-    // Each entry is a signed (DATA_WIDTH+1)-bit value ranging from -8191 to +8191
-    // This allows the output to be centered at 8192 in the unsigned 0-16383 range
-    reg signed [DATA_WIDTH:0] sine_lut [0:(1<<LUT_ADDR_WIDTH)-1];
-    reg signed [DATA_WIDTH:0] cosine_lut [0:(1<<LUT_ADDR_WIDTH)-1];
+    // Each entry is a signed DATA_WIDTH-bit value ranging from -8192 to +8191
+    reg signed [DATA_WIDTH-1:0] sine_lut [0:(1<<LUT_ADDR_WIDTH)-1];
+    reg signed [DATA_WIDTH-1:0] cosine_lut [0:(1<<LUT_ADDR_WIDTH)-1];
     
     // Variables for LUT initialization
     integer i;
@@ -93,15 +92,20 @@ module lut_waveform_gen #
     initial begin
         for (i = 0; i < (1 << LUT_ADDR_WIDTH); i = i + 1) begin
             // Calculate angle: i * 2π / (2^LUT_ADDR_WIDTH)
-            // Sine and cosine values scaled to range -8191 to +8191
-            // This allows output to be centered at 8192 in unsigned 0-16383 range
+            // Sine and cosine values scaled to signed 14-bit range -8192 to +8191
             angle = (i * 2.0 * 3.14159265358979323846) / (1 << LUT_ADDR_WIDTH);
-            sine_val = $sin(angle) * ((1 << (DATA_WIDTH-1)) - 1);  // Scale to -8191 to +8191
-            cosine_val = $cos(angle) * ((1 << (DATA_WIDTH-1)) - 1);
-            
+            sine_val = $sin(angle) * (1 << (DATA_WIDTH-1));
+            cosine_val = $cos(angle) * (1 << (DATA_WIDTH-1));
+
             sine_int = $rtoi(sine_val);
             cosine_int = $rtoi(cosine_val);
-            
+
+            // Clamp to signed 14-bit range [-8192, +8191]
+            if (sine_int > ((1 << (DATA_WIDTH-1)) - 1)) sine_int = (1 << (DATA_WIDTH-1)) - 1;
+            if (sine_int < -(1 << (DATA_WIDTH-1))) sine_int = -(1 << (DATA_WIDTH-1));
+            if (cosine_int > ((1 << (DATA_WIDTH-1)) - 1)) cosine_int = (1 << (DATA_WIDTH-1)) - 1;
+            if (cosine_int < -(1 << (DATA_WIDTH-1))) cosine_int = -(1 << (DATA_WIDTH-1));
+
             sine_lut[i] = sine_int;
             cosine_lut[i] = cosine_int;
         end
@@ -109,14 +113,7 @@ module lut_waveform_gen #
     
     // Lookup table read (registered for timing)
     reg [LUT_ADDR_WIDTH-1:0] lut_addr_reg;
-    wire [DATA_WIDTH:0] sine_unsigned_temp, cosine_unsigned_temp;
-    
-    // Convert signed LUT values (-8191 to +8191) to unsigned (1 to 16383)
-    // by adding 8192 (which is 1 << (DATA_WIDTH-1))
-    // Center value is 8192, range is 1 to 16383 (stays within 14-bit unsigned bounds)
-    assign sine_unsigned_temp = sine_lut[lut_addr_reg] + (1 << (DATA_WIDTH-1));
-    assign cosine_unsigned_temp = cosine_lut[lut_addr_reg] + (1 << (DATA_WIDTH-1));
-    
+
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             lut_addr_reg <= {LUT_ADDR_WIDTH{1'b0}};
@@ -125,10 +122,9 @@ module lut_waveform_gen #
             valid_out <= 1'b0;
         end else begin
             lut_addr_reg <= lut_addr;
-            // Convert to unsigned 14-bit by taking lower DATA_WIDTH bits
-            // LUT values are -8192 to +8192, adding 8192 gives 0 to 16384
-            sine_out <= sine_unsigned_temp[DATA_WIDTH-1:0];
-            cosine_out <= cosine_unsigned_temp[DATA_WIDTH-1:0];
+            // Output signed 14-bit LUT values directly
+            sine_out <= sine_lut[lut_addr_reg];
+            cosine_out <= cosine_lut[lut_addr_reg];
             valid_out <= 1'b1;
         end
     end
