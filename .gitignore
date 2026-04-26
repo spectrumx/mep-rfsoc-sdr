@@ -35,9 +35,16 @@ __pycache__/
 
 # Ignore vscode files
 *.code-workspace
+.codex
 
 # Ignore Python build artifacts
 dist/
 
 # Ignore generated version file
 _version.py
+
+# Ignore results files
+*_results.txt
+
+# Ignore planning files
+*_plan.md
