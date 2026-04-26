@@ -15,15 +15,19 @@ module lut_waveform_gen #
 (
     // Logical sample rate (NCO clock) in Hz (default 51.2 MSPS = 51200000)
     parameter integer CLOCK_FREQUENCY = 51200000,
-    
+
     // Phase accumulator width (determines frequency resolution)
     parameter integer PHASE_WIDTH = 32,
-    
+
     // Output data width (output precision)
     parameter integer DATA_WIDTH = 14,
-    
+
     // Lookup table address width (determines table size: 2^LUT_ADDR_WIDTH entries)
-    parameter integer LUT_ADDR_WIDTH = 12  // 4096 entries
+    parameter integer LUT_ADDR_WIDTH = 12, // 4096 entries
+
+    // Number of logical sample steps the phase accumulator advances per clock cycle.
+    // Default 1: one sample per clock. Set to 5 for 51.2 MSPS at 10.240 MHz AXIS clock.
+    parameter integer SAMPLES_PER_CLOCK = 1
 )
 (
     input wire clk,
@@ -34,7 +38,12 @@ module lut_waveform_gen #
     
     // Phase offset (32-bit, normalized to 2^PHASE_WIDTH)
     input wire [PHASE_WIDTH-1:0] phase_offset,
-    
+
+    // Per-instance phase step offset in units of one logical sample step.
+    // Used when SAMPLES_PER_CLOCK > 1 to generate consecutive samples from
+    // multiple instances. Default 0.
+    input wire [PHASE_WIDTH-1:0] phase_step_offset,
+
     // Output sine and cosine values (signed, DATA_WIDTH bits)
     // Range: -8192 to +8191. Positive peak clamped to +8191, negative peak to -8192.
     output reg signed [DATA_WIDTH-1:0] sine_out,
@@ -53,8 +62,8 @@ module lut_waveform_gen #
     wire [63:0] phase_increment_64;
     wire [PHASE_WIDTH-1:0] phase_increment;
     
-    // Calculate: frequency * 2^PHASE_WIDTH / CLOCK_FREQUENCY
-    assign phase_increment_64 = (frequency * (64'd1 << PHASE_WIDTH)) / CLOCK_FREQUENCY;
+    // Calculate: frequency * SAMPLES_PER_CLOCK * 2^PHASE_WIDTH / CLOCK_FREQUENCY
+    assign phase_increment_64 = (frequency * SAMPLES_PER_CLOCK * (64'd1 << PHASE_WIDTH)) / CLOCK_FREQUENCY;
     assign phase_increment = phase_increment_64[PHASE_WIDTH-1:0];
     
     // Phase accumulator update
@@ -66,10 +75,11 @@ module lut_waveform_gen #
         end
     end
     
-    // Phase with offset
+   // Phase with offset
     // phase=0 corresponds to sin(0)=0 (sine_out=0), cos(0)=1 (cosine_out≈+8191)
+    // phase_step_offset adds an extra offset in units of one logical sample step
     wire [PHASE_WIDTH-1:0] phase_unsigned;
-    assign phase_unsigned = phase_accum + phase_offset;
+    assign phase_unsigned = phase_accum + phase_offset + phase_step_offset;
     
     // Extract LUT address from phase (use upper bits for table index)
     // Phase is 0 to 2^PHASE_WIDTH-1 representing 0 to 2π

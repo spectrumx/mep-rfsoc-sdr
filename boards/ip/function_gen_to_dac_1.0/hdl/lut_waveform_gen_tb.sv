@@ -13,9 +13,10 @@ module lut_waveform_gen_tb;
     reg clk;
     reg rst_n;
 
-    // DUT input signals
+   // DUT input signals
     reg [31:0] frequency;
     reg [PHASE_WIDTH-1:0] phase_offset;
+    reg [PHASE_WIDTH-1:0] phase_step_offset;
 
     // DUT output signals
     wire signed [DATA_WIDTH-1:0] sine_out;
@@ -33,6 +34,7 @@ module lut_waveform_gen_tb;
         .rst_n(rst_n),
         .frequency(frequency),
         .phase_offset(phase_offset),
+        .phase_step_offset(phase_step_offset),
         .sine_out(sine_out),
         .cosine_out(cosine_out),
         .valid_out(valid_out)
@@ -347,6 +349,7 @@ module lut_waveform_gen_tb;
         // Initialize signals
         frequency = 0;
         phase_offset = 0;
+        phase_step_offset = 0;
         total_failures = 0;
 
         // Wait for initial reset to release

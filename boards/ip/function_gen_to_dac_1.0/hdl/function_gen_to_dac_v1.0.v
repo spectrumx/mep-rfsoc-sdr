@@ -10,6 +10,19 @@
 //   - 10 words per beat = 5 interleaved complex samples (I0,Q0,I1,Q1,...,I4,Q4)
 //   - m00_axis_aclk: 10.240 MHz AXIS beat clock
 //   - Logical complex sample rate: 51.2 MSPS
+//   - One beat emitted every AXIS clock cycle when enabled
+//
+// Implementation: 5 lut_waveform_gen instances, each advancing 5 phase steps
+// per clock (SAMPLES_PER_CLOCK=5), with phase_step_offset 0..4 to produce
+// 5 consecutive samples from one beat.
+//
+// Startup: a 2-cycle pipeline flush ensures the first accepted beat contains
+// five distinct consecutive samples, not stale reset-state values.
+//
+// Backpressure: under backpressure (tvalid && !tready), the waveform generators
+// continue advancing internally. Dropped samples cause the output waveform to
+// jump in phase when streaming resumes. This preserves wall-clock phase
+// continuity at the cost of sample continuity during stalls.
 //
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -64,6 +77,9 @@ module function_gen_to_dac_1_0 #
     // Logical sample rate for the NCO (51.2 MSPS)
     localparam integer LOGICAL_SAMPLE_RATE     = 51200000;
 
+    // Phase accumulator width (must match lut_waveform_gen)
+    localparam integer PHASE_WIDTH             = 32;
+
     // Function generator control registers
     reg [31:0] waveform_type_ctrl;
     reg [31:0] frequency_ctrl;
@@ -72,42 +88,206 @@ module function_gen_to_dac_1_0 #
     reg [31:0] offset_ctrl;
     reg [31:0] enable_ctrl;
 
-    // Waveform generator signals (signed 14-bit outputs)
-    wire signed [13:0] waveform_sine_out;
-    wire signed [13:0] waveform_cosine_out;
-    wire waveform_valid_out;
+    // Per-sample phase increment: freq * 2^PHASE_WIDTH / LOGICAL_SAMPLE_RATE
+    wire [63:0] phase_inc_64;
+    wire [31:0] phase_inc;
+    assign phase_inc_64 = (frequency_ctrl * (64'd1 << PHASE_WIDTH)) / LOGICAL_SAMPLE_RATE;
+    assign phase_inc = phase_inc_64[PHASE_WIDTH-1:0];
 
-    // 16-bit word buffer for packing into one AXIS beat (10 words = 5 complex samples)
-    // Layout: word[0]=I0, word[1]=Q0, word[2]=I1, word[3]=Q1, ..., word[9]=Q4
-    reg signed [WORD_WIDTH-1:0] word_buffer [0:WORDS_PER_BEAT-1];
-    reg [3:0] word_count;
-    reg buffer_full;
+    // Phase step offsets for samples 0..4
+    wire [31:0] phase_step0;
+    wire [31:0] phase_step1;
+    wire [31:0] phase_step2;
+    wire [31:0] phase_step3;
+    wire [31:0] phase_step4;
+    assign phase_step0 = 32'd0;
+    assign phase_step1 = phase_inc;
+    assign phase_step2 = phase_inc + phase_inc;
+    assign phase_step3 = phase_inc + phase_inc + phase_inc;
+    assign phase_step4 = phase_inc + phase_inc + phase_inc + phase_inc;
 
-    // AXI4-Stream output registers
-    reg [C_M00_AXIS_TDATA_WIDTH-1:0] output_data;
-    reg output_valid;
+    // Waveform generator outputs (signed 14-bit)
+    wire signed [13:0] sine0;
+    wire signed [13:0] cosine0;
+    wire signed [13:0] sine1;
+    wire signed [13:0] cosine1;
+    wire signed [13:0] sine2;
+    wire signed [13:0] cosine2;
+    wire signed [13:0] sine3;
+    wire signed [13:0] cosine3;
+    wire signed [13:0] sine4;
+    wire signed [13:0] cosine4;
 
-    // Instantiate waveform generator
-    // Clocked at m00_axis_aclk; each cycle produces one logical NCO sample.
-    // CLOCK_FREQUENCY=51200000 sets the logical sample rate reference.
+    // Separate valid wires for each generator instance
+    wire valid0;
+    wire valid1;
+    wire valid2;
+    wire valid3;
+    wire valid4;
+
+    // Sample 0: current phase
     lut_waveform_gen #(
         .CLOCK_FREQUENCY(LOGICAL_SAMPLE_RATE),
-        .PHASE_WIDTH(32),
+        .PHASE_WIDTH(PHASE_WIDTH),
         .DATA_WIDTH(14),
-        .LUT_ADDR_WIDTH(12)
-    ) u_waveform_gen (
+        .LUT_ADDR_WIDTH(12),
+        .SAMPLES_PER_CLOCK(COMPLEX_SAMPLES_PER_BEAT)
+    ) u_wave0 (
         .clk(m00_axis_aclk),
         .rst_n(m00_axis_aresetn),
         .frequency(frequency_ctrl),
         .phase_offset(phase_ctrl),
-        .sine_out(waveform_sine_out),
-        .cosine_out(waveform_cosine_out),
-        .valid_out(waveform_valid_out)
+        .phase_step_offset(phase_step0),
+        .sine_out(sine0),
+        .cosine_out(cosine0),
+        .valid_out(valid0)
     );
 
-    // AXI4-Stream output assignments
+    // Sample 1: phase + 1 step
+    lut_waveform_gen #(
+        .CLOCK_FREQUENCY(LOGICAL_SAMPLE_RATE),
+        .PHASE_WIDTH(PHASE_WIDTH),
+        .DATA_WIDTH(14),
+        .LUT_ADDR_WIDTH(12),
+        .SAMPLES_PER_CLOCK(COMPLEX_SAMPLES_PER_BEAT)
+    ) u_wave1 (
+        .clk(m00_axis_aclk),
+        .rst_n(m00_axis_aresetn),
+        .frequency(frequency_ctrl),
+        .phase_offset(phase_ctrl),
+        .phase_step_offset(phase_step1),
+        .sine_out(sine1),
+        .cosine_out(cosine1),
+        .valid_out(valid1)
+    );
+
+    // Sample 2: phase + 2 steps
+    lut_waveform_gen #(
+        .CLOCK_FREQUENCY(LOGICAL_SAMPLE_RATE),
+        .PHASE_WIDTH(PHASE_WIDTH),
+        .DATA_WIDTH(14),
+        .LUT_ADDR_WIDTH(12),
+        .SAMPLES_PER_CLOCK(COMPLEX_SAMPLES_PER_BEAT)
+    ) u_wave2 (
+        .clk(m00_axis_aclk),
+        .rst_n(m00_axis_aresetn),
+        .frequency(frequency_ctrl),
+        .phase_offset(phase_ctrl),
+        .phase_step_offset(phase_step2),
+        .sine_out(sine2),
+        .cosine_out(cosine2),
+        .valid_out(valid2)
+    );
+
+    // Sample 3: phase + 3 steps
+    lut_waveform_gen #(
+        .CLOCK_FREQUENCY(LOGICAL_SAMPLE_RATE),
+        .PHASE_WIDTH(PHASE_WIDTH),
+        .DATA_WIDTH(14),
+        .LUT_ADDR_WIDTH(12),
+        .SAMPLES_PER_CLOCK(COMPLEX_SAMPLES_PER_BEAT)
+    ) u_wave3 (
+        .clk(m00_axis_aclk),
+        .rst_n(m00_axis_aresetn),
+        .frequency(frequency_ctrl),
+        .phase_offset(phase_ctrl),
+        .phase_step_offset(phase_step3),
+        .sine_out(sine3),
+        .cosine_out(cosine3),
+        .valid_out(valid3)
+    );
+
+    // Sample 4: phase + 4 steps
+    lut_waveform_gen #(
+        .CLOCK_FREQUENCY(LOGICAL_SAMPLE_RATE),
+        .PHASE_WIDTH(PHASE_WIDTH),
+        .DATA_WIDTH(14),
+        .LUT_ADDR_WIDTH(12),
+        .SAMPLES_PER_CLOCK(COMPLEX_SAMPLES_PER_BEAT)
+    ) u_wave4 (
+        .clk(m00_axis_aclk),
+        .rst_n(m00_axis_aresetn),
+        .frequency(frequency_ctrl),
+        .phase_offset(phase_ctrl),
+        .phase_step_offset(phase_step4),
+        .sine_out(sine4),
+        .cosine_out(cosine4),
+        .valid_out(valid4)
+    );
+
+    // All generators share the same phase accumulator advancement, so
+    // their valid signals should all transition at the same time.
+    // Use valid0 as the representative pipeline-valid indicator.
+    wire all_valid;
+    assign all_valid = valid0 && valid1 && valid2 && valid3 && valid4;
+
+    // Startup guard: suppress tvalid for first 2 cycles after enable goes high.
+    // The LUT has a 2-cycle pipeline (lut_addr_reg latches current address,
+    // then outputs are read from the latched address). When enable transitions
+    // from 0 to 1, the first beat's LUT outputs may contain stale data from
+    // the disabled state. A 2-cycle delay after enable ensures the pipeline
+    // has flushed and all 5 generators produce distinct consecutive samples.
+    reg enable_d1;
+    wire enable_rise;
+    reg [1:0] startup_count;
+    wire startup_ok;
+
+    assign enable_rise = enable_ctrl[0] && !enable_d1;
+
+    always @(posedge m00_axis_aclk or negedge m00_axis_aresetn) begin
+        if (!m00_axis_aresetn) begin
+            enable_d1 <= 1'b0;
+            startup_count <= 2'd0;
+        end else begin
+            enable_d1 <= enable_ctrl[0];
+            if (enable_rise) begin
+                startup_count <= 2'd0;
+            end else if (enable_ctrl[0] && startup_count < 2'd2) begin
+                startup_count <= startup_count + 1'b1;
+            end
+        end
+    end
+    assign startup_ok = (startup_count >= 2'd2);
+
+    // AXI4-Stream output
+    reg [C_M00_AXIS_TDATA_WIDTH-1:0] output_data;
+    reg output_valid;
+
     assign m00_axis_tvalid = output_valid;
     assign m00_axis_tdata  = output_data;
+
+    // Pack and output one beat per AXIS clock cycle
+    always @(posedge m00_axis_aclk or negedge m00_axis_aresetn) begin
+        if (!m00_axis_aresetn) begin
+            output_data  <= {C_M00_AXIS_TDATA_WIDTH{1'b0}};
+            output_valid <= 1'b0;
+        end else begin
+            // Pack 10 signed 16-bit words from 5 complex samples
+            // Sign-extend 14-bit LUT values to 16-bit
+            output_data <= {
+                {{2{cosine4[13]}}, cosine4},   // word9  Q4
+                {{2{sine4[13]}}, sine4},       // word8  I4
+                {{2{cosine3[13]}}, cosine3},   // word7  Q3
+                {{2{sine3[13]}}, sine3},       // word6  I3
+                {{2{cosine2[13]}}, cosine2},   // word5  Q2
+                {{2{sine2[13]}}, sine2},       // word4  I2
+                {{2{cosine1[13]}}, cosine1},   // word3  Q1
+                {{2{sine1[13]}}, sine1},       // word2  I1
+                {{2{cosine0[13]}}, cosine0},   // word1  Q0
+                {{2{sine0[13]}}, sine0}        // word0  I0
+            };
+
+            // Valid control: assert when enabled, startup guard has passed,
+            // and all generators are valid
+            if (!enable_ctrl[0] || !startup_ok) begin
+                output_valid <= 1'b0;
+            end else if (all_valid) begin
+                output_valid <= 1'b1;
+            end else begin
+                output_valid <= 1'b0;
+            end
+        end
+    end
 
     // AXI4-Lite interface (always-ready for now; hardened in Step 2.4)
     assign s00_axi_awready = 1'b1;
@@ -183,44 +363,5 @@ module function_gen_to_dac_1_0 #
     end
 
     assign s00_axi_rvalid = rvalid_reg;
-
-    // Sample collection and AXI4-Stream packing
-    // Collects one I/Q pair per m00_axis_aclk cycle.
-    // After WORDS_PER_BEAT words (5 complex samples), packs into one 160-bit beat.
-    always @(posedge m00_axis_aclk or negedge m00_axis_aresetn) begin
-        if (!m00_axis_aresetn) begin
-            word_count   <= 4'h0;
-            buffer_full  <= 1'b0;
-            output_valid <= 1'b0;
-        end else begin
-            // When buffer is full, present packed beat on output
-            if (buffer_full) begin
-                output_data <= {
-                    word_buffer[9], word_buffer[8], word_buffer[7], word_buffer[6],
-                    word_buffer[5], word_buffer[4], word_buffer[3], word_buffer[2],
-                    word_buffer[1], word_buffer[0]
-                };
-                output_valid <= 1'b1;
-                buffer_full  <= 1'b0;
-            end else if (output_valid && m00_axis_tready) begin
-                output_valid <= 1'b0;
-            end
-
-            // Collect I/Q word pairs when enabled and waveform is valid
-            if (enable_ctrl[0] && waveform_valid_out && !buffer_full && !output_valid) begin
-                // Pack signed 14-bit LUT samples into signed 16-bit words
-                // (Step 2.3 will add proper MSB-aligned DAC conversion)
-                word_buffer[word_count]        <= {{2{waveform_sine_out[13]}}, waveform_sine_out};
-                word_buffer[word_count + 1'b1] <= {{2{waveform_cosine_out[13]}}, waveform_cosine_out};
-
-                if (word_count == WORDS_PER_BEAT - 2) begin
-                    word_count  <= 4'h0;
-                    buffer_full <= 1'b1;
-                end else begin
-                    word_count <= word_count + 2;
-                end
-            end
-        end
-    end
 
 endmodule
