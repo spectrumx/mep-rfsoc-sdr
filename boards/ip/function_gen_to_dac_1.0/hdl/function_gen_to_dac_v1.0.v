@@ -211,6 +211,43 @@ module function_gen_to_dac_1_0 #
     reg [31:0] offset_shadow;
     reg [31:0] enable_shadow;
 
+    // Step 2.5.3: AXI-domain publish bundle and dirty/pending bookkeeping
+    // These registers form a stable AXI-domain bundle for CDC transfer.
+    // The DAC domain still consumes *_shadow directly until Step 2.5.5.
+    //
+    // Publish registers hold one in-flight config bundle. On the first write
+    // when no request is pending, the full post-write shadow state is loaded
+    // into cfg_pub_*. Subsequent writes while a request is pending only set
+    // cfg_dirty. On acknowledgment, if dirty the latest shadow state is
+    // re-published with a new toggle; if clean the pending flag clears.
+
+    // Publish bundle (AXI domain)
+    reg [31:0] cfg_pub_waveform_type;
+    reg [31:0] cfg_pub_frequency;
+    reg [31:0] cfg_pub_amplitude;
+    reg [31:0] cfg_pub_phase;
+    reg [31:0] cfg_pub_offset;
+    reg [31:0] cfg_pub_enable;
+
+    // Bookkeeping (AXI domain)
+    reg  cfg_req_toggle;
+    reg  cfg_req_pending;
+    reg  cfg_dirty;
+
+    // Temporary simulation-only acknowledgment (Step 2.5.3 only)
+    // Driven by testbench via hierarchical reference. Replaced by real
+    // CDC synchronizer in Step 2.5.4.
+    reg  cfg_tmp_ack;
+
+    // Next-shadow regs: computed combinatorially after pending declarations.
+    // (Declared here, assigned in always @(*) block near AXI write logic.)
+    reg [31:0] next_waveform_type;
+    reg [31:0] next_frequency;
+    reg [31:0] next_amplitude;
+    reg [31:0] next_phase;
+    reg [31:0] next_offset;
+    reg [31:0] next_enable;
+
     // Per-sample phase increment: freq * 2^PHASE_WIDTH / LOGICAL_SAMPLE_RATE
     wire [63:0] phase_inc_64;
     wire [31:0] phase_inc;
@@ -438,6 +475,29 @@ module function_gen_to_dac_1_0 #
     reg  [(C_S00_AXI_DATA_WIDTH/8)-1:0] pending_w_strb;
     reg  pending_w;
 
+    // Step 2.5.3: Next-shadow combinational logic
+    // Computes post-write shadow values so the publish bundle sees the
+    // just-written value, not the pre-write value (avoids NBA ordering issues).
+    always @(*) begin
+        next_waveform_type = waveform_type_shadow;
+        next_frequency     = frequency_shadow;
+        next_amplitude     = amplitude_shadow;
+        next_phase         = phase_shadow;
+        next_offset        = offset_shadow;
+        next_enable        = enable_shadow;
+        if (pending_aw && pending_w) begin
+            case (pending_aw_addr[6:0])
+                7'h00: next_waveform_type = apply_wstrb(waveform_type_shadow, pending_w_data, pending_w_strb);
+                7'h01: next_frequency     = apply_wstrb(frequency_shadow,     pending_w_data, pending_w_strb);
+                7'h02: next_amplitude     = apply_wstrb(amplitude_shadow,     pending_w_data, pending_w_strb);
+                7'h03: next_phase         = apply_wstrb(phase_shadow,         pending_w_data, pending_w_strb);
+                7'h04: next_offset        = apply_wstrb(offset_shadow,        pending_w_data, pending_w_strb);
+                7'h05: next_enable        = apply_wstrb(enable_shadow,        pending_w_data, pending_w_strb);
+                default: ;
+            endcase
+        end
+    end
+
     // Write response valid signal (declared before ready assigns)
     reg bvalid_reg;
 
@@ -494,6 +554,7 @@ module function_gen_to_dac_1_0 #
 
     // Register write logic: commit when both AW and W are pending
     // Step 2.4.3: WSTRB-aware byte-lane merge for all writable registers
+    // Step 2.5.3: uses next_* wires so publish bundle sees post-write values
     always @(posedge s00_axi_aclk or negedge s00_axi_aresetn) begin
         if (!s00_axi_aresetn) begin
             waveform_type_shadow <= 32'h0;
@@ -503,15 +564,67 @@ module function_gen_to_dac_1_0 #
             offset_shadow        <= 32'h0;
             enable_shadow        <= 32'h0;
         end else if (pending_aw && pending_w) begin
-            case (pending_aw_addr[6:0])
-              7'h00: waveform_type_shadow <= apply_wstrb(waveform_type_shadow, pending_w_data, pending_w_strb);
-              7'h01: frequency_shadow     <= apply_wstrb(frequency_shadow, pending_w_data, pending_w_strb);
-              7'h02: amplitude_shadow     <= apply_wstrb(amplitude_shadow, pending_w_data, pending_w_strb);
-              7'h03: phase_shadow         <= apply_wstrb(phase_shadow, pending_w_data, pending_w_strb);
-              7'h04: offset_shadow        <= apply_wstrb(offset_shadow, pending_w_data, pending_w_strb);
-              7'h05: enable_shadow        <= apply_wstrb(enable_shadow, pending_w_data, pending_w_strb);
-              default: ;
-            endcase
+            waveform_type_shadow <= next_waveform_type;
+            frequency_shadow     <= next_frequency;
+            amplitude_shadow     <= next_amplitude;
+            phase_shadow         <= next_phase;
+            offset_shadow        <= next_offset;
+            enable_shadow        <= next_enable;
+        end
+    end
+
+    // Step 2.5.3: Publish bundle and pending/dirty state machine (AXI domain)
+    // On first write with no pending request: load full publish bundle from
+    // next_* wires (post-write values), toggle cfg_req_toggle, set pending.
+    // On write while pending: set dirty, leave publish unchanged.
+    // On temporary ack while pending+dirty: reload publish from shadow,
+    // toggle again, clear dirty, stay pending.
+    // On temporary ack while pending+clean: clear pending.
+    always @(posedge s00_axi_aclk or negedge s00_axi_aresetn) begin
+        if (!s00_axi_aresetn) begin
+            cfg_pub_waveform_type <= 32'h0;
+            cfg_pub_frequency     <= 32'h0;
+            cfg_pub_amplitude     <= 32'h0;
+            cfg_pub_phase         <= 32'h0;
+            cfg_pub_offset        <= 32'h0;
+            cfg_pub_enable        <= 32'h0;
+            cfg_req_toggle        <= 1'b0;
+            cfg_req_pending       <= 1'b0;
+            cfg_dirty             <= 1'b0;
+        end else begin
+            // Temporary ack (simulation-only, replaced by CDC in Step 2.5.4)
+            if (cfg_tmp_ack && cfg_req_pending) begin
+                if (cfg_dirty) begin
+                    // Coalesced: reload publish from latest shadow, toggle, stay pending
+                    cfg_pub_waveform_type <= waveform_type_shadow;
+                    cfg_pub_frequency     <= frequency_shadow;
+                    cfg_pub_amplitude     <= amplitude_shadow;
+                    cfg_pub_phase         <= phase_shadow;
+                    cfg_pub_offset        <= offset_shadow;
+                    cfg_pub_enable        <= enable_shadow;
+                    cfg_req_toggle        <= ~cfg_req_toggle;
+                    cfg_dirty             <= 1'b0;
+                end else begin
+                    // Clean ack: clear pending
+                    cfg_req_pending       <= 1'b0;
+                end
+            end else if (pending_aw && pending_w && !bvalid_reg) begin
+                if (!cfg_req_pending) begin
+                    // First write: publish full bundle with post-write values
+                    cfg_pub_waveform_type <= next_waveform_type;
+                    cfg_pub_frequency     <= next_frequency;
+                    cfg_pub_amplitude     <= next_amplitude;
+                    cfg_pub_phase         <= next_phase;
+                    cfg_pub_offset        <= next_offset;
+                    cfg_pub_enable        <= next_enable;
+                    cfg_req_toggle        <= ~cfg_req_toggle;
+                    cfg_req_pending       <= 1'b1;
+                    cfg_dirty             <= 1'b0;
+                end else begin
+                    // Write while request pending: coalesce into dirty
+                    cfg_dirty             <= 1'b1;
+                end
+            end
         end
     end
 

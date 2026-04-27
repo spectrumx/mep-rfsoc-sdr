@@ -501,7 +501,7 @@ module function_gen_to_dac_tb;
 
         $display("========================================");
         $display("Function Gen to DAC Testbench");
-        $display("Step 2.2 + Step 2.3 + Step 2.4.1-2.4.5 + Step 2.5.1 Verification");
+        $display("Step 2.2 + Step 2.3 + Step 2.4.1-2.4.5 + Step 2.5.1-2.5.3 Verification");
         $display("========================================");
         $display("AXIS tdata width: %0d bits", C_M00_AXIS_TDATA_WIDTH);
         $display("Words per beat: %0d", WORDS_PER_BEAT);
@@ -1653,6 +1653,278 @@ module function_gen_to_dac_tb;
                 $display("  PASS: All Step 2.5.1 baseline dynamic-update tests passed");
         end
 
+        // Step 2.5.3: CDC config publish bundle and dirty/pending bookkeeping
+        // White-box tests: access uut.cfg_pub_*, uut.cfg_req_pending,
+        // uut.cfg_dirty, and uut.cfg_tmp_ack directly. These hierarchical
+        // references are localized to this step and replaced by black-box
+        // CDC tests in Step 2.5.4.
+        $display("\nSTEP 2.5.3 - CDC CONFIG PUBLISH BUNDLE:");
+        $display("----------------------------------------");
+        begin
+            integer cfg_failures;
+            cfg_failures = 0;
+
+            // Disable streaming for clean bus-only testing
+            write_register(7'h05, 32'd0);
+            repeat (5) @(posedge s00_axi_aclk);
+
+            // Drain any pending publish state from prior AXI writes.
+            // The initial register configuration and Step 2.4.x tests generated
+            // writes that set cfg_req_pending and cfg_dirty. Acknowledge them
+            // so the state machine returns to idle before our controlled tests.
+            if (uut.cfg_req_pending) begin
+                // First ack may be dirty (re-publishes, stays pending)
+                uut.cfg_tmp_ack = 1'b1;
+                @(posedge s00_axi_aclk);
+                uut.cfg_tmp_ack = 1'b0;
+                @(posedge s00_axi_aclk);
+                // Second ack should be clean (clears pending)
+                if (uut.cfg_req_pending) begin
+                    uut.cfg_tmp_ack = 1'b1;
+                    @(posedge s00_axi_aclk);
+                    uut.cfg_tmp_ack = 1'b0;
+                    @(posedge s00_axi_aclk);
+                end
+            end
+            // Verify clean state
+            if (uut.cfg_req_pending !== 1'b0) begin
+                $display("    WARN: cfg_req_pending still 1 after drain (unexpected)");
+            end
+            if (uut.cfg_dirty !== 1'b0) begin
+                $display("    WARN: cfg_dirty still 1 after drain (unexpected)");
+            end
+
+            // Test 1: First-write publish behavior
+            $display("  Test 1: first-write publish (frequency -> 3MHz)");
+            write_register(7'h01, 32'd3000000);
+            @(posedge s00_axi_aclk);
+
+            // Check AXI shadow readback
+            read_register(7'h01, rb_data);
+            if (rb_data !== 32'd3000000) begin
+                $display("    FAIL: AXI shadow readback = 0x%08h (expected 0x%08h)", rb_data, 32'd3000000);
+                cfg_failures = cfg_failures + 1;
+            end else
+                $display("    PASS: AXI shadow readback = 0x%08h", rb_data);
+
+            // Check publish bundle contains the new value
+            if (uut.cfg_pub_frequency !== 32'd3000000) begin
+                $display("    FAIL: cfg_pub_frequency = 0x%08h (expected 0x%08h)",
+                         uut.cfg_pub_frequency, 32'd3000000);
+                cfg_failures = cfg_failures + 1;
+            end else
+                $display("    PASS: cfg_pub_frequency = 0x%08h", uut.cfg_pub_frequency);
+
+            // Check bookkeeping: pending=1, dirty=0
+            if (uut.cfg_req_pending !== 1'b1) begin
+                $display("    FAIL: cfg_req_pending = %0d (expected 1)", uut.cfg_req_pending);
+                cfg_failures = cfg_failures + 1;
+            end else
+                $display("    PASS: cfg_req_pending = 1");
+
+            if (uut.cfg_dirty !== 1'b0) begin
+                $display("    FAIL: cfg_dirty = %0d (expected 0)", uut.cfg_dirty);
+                cfg_failures = cfg_failures + 1;
+            end else
+                $display("    PASS: cfg_dirty = 0");
+
+            // Test 2: Dirty/coalescing behavior before acknowledgment
+            // While cfg_req_pending=1, write two additional controls.
+            $display("  Test 2: dirty/coalescing (amplitude -> half, phase -> 0x10000000)");
+            write_register(7'h02, 32'h00003FFF);
+            @(posedge s00_axi_aclk);
+            write_register(7'h03, 32'h10000000);
+            @(posedge s00_axi_aclk);
+
+            // Check shadows updated to latest values
+            read_register(7'h02, rb_data);
+            if (rb_data !== 32'h00003FFF) begin
+                $display("    FAIL: amplitude shadow = 0x%08h (expected 0x00003FFF)", rb_data);
+                cfg_failures = cfg_failures + 1;
+            end else
+                $display("    PASS: amplitude shadow = 0x%08h", rb_data);
+
+            read_register(7'h03, rb_data);
+            if (rb_data !== 32'h10000000) begin
+                $display("    FAIL: phase shadow = 0x%08h (expected 0x10000000)", rb_data);
+                cfg_failures = cfg_failures + 1;
+            end else
+                $display("    PASS: phase shadow = 0x%08h", rb_data);
+
+            // Publish bundle should still be the original (frequency=3MHz)
+            if (uut.cfg_pub_frequency !== 32'd3000000) begin
+                $display("    FAIL: cfg_pub_frequency changed to 0x%08h (expected 0x%08h unchanged)",
+                         uut.cfg_pub_frequency, 32'd3000000);
+                cfg_failures = cfg_failures + 1;
+            end else
+                $display("    PASS: cfg_pub_frequency unchanged = 0x%08h", uut.cfg_pub_frequency);
+
+            // Amplitude in publish should still be original (full scale from initial config)
+            if (uut.cfg_pub_amplitude !== 32'h00007FFF) begin
+                $display("    FAIL: cfg_pub_amplitude = 0x%08h (expected 0x00007FFF unchanged)",
+                         uut.cfg_pub_amplitude);
+                cfg_failures = cfg_failures + 1;
+            end else
+                $display("    PASS: cfg_pub_amplitude unchanged = 0x%08h", uut.cfg_pub_amplitude);
+
+            if (uut.cfg_dirty !== 1'b1) begin
+                $display("    FAIL: cfg_dirty = %0d (expected 1)", uut.cfg_dirty);
+                cfg_failures = cfg_failures + 1;
+            end else
+                $display("    PASS: cfg_dirty = 1 after back-to-back writes");
+
+            // Test 3: Temporary acknowledgment while dirty -> re-publish
+            $display("  Test 3: temporary ack while dirty (re-publish)");
+            uut.cfg_tmp_ack = 1'b1;
+            @(posedge s00_axi_aclk);
+            uut.cfg_tmp_ack = 1'b0;
+            @(posedge s00_axi_aclk);
+
+            // Publish should now have latest shadow values
+            if (uut.cfg_pub_frequency !== 32'd3000000) begin
+                $display("    FAIL: cfg_pub_frequency = 0x%08h (expected 0x%08h)",
+                         uut.cfg_pub_frequency, 32'd3000000);
+                cfg_failures = cfg_failures + 1;
+            end else
+                $display("    PASS: cfg_pub_frequency re-published = 0x%08h", uut.cfg_pub_frequency);
+
+            if (uut.cfg_pub_amplitude !== 32'h00003FFF) begin
+                $display("    FAIL: cfg_pub_amplitude = 0x%08h (expected 0x00003FFF)",
+                         uut.cfg_pub_amplitude);
+                cfg_failures = cfg_failures + 1;
+            end else
+                $display("    PASS: cfg_pub_amplitude re-published = 0x%08h", uut.cfg_pub_amplitude);
+
+            if (uut.cfg_pub_phase !== 32'h10000000) begin
+                $display("    FAIL: cfg_pub_phase = 0x%08h (expected 0x10000000)",
+                         uut.cfg_pub_phase);
+                cfg_failures = cfg_failures + 1;
+            end else
+                $display("    PASS: cfg_pub_phase re-published = 0x%08h", uut.cfg_pub_phase);
+
+            // cfg_req_toggle: started 0, first write -> 1, dirty ack -> 0
+            if (uut.cfg_req_toggle !== 1'b0) begin
+                $display("    FAIL: cfg_req_toggle = %0d (expected 0 after dirty re-publish)",
+                         uut.cfg_req_toggle);
+                cfg_failures = cfg_failures + 1;
+            end else
+                $display("    PASS: cfg_req_toggle toggled to %0d after dirty re-publish", uut.cfg_req_toggle);
+
+            if (uut.cfg_dirty !== 1'b0) begin
+                $display("    FAIL: cfg_dirty = %0d (expected 0 after ack)", uut.cfg_dirty);
+                cfg_failures = cfg_failures + 1;
+            end else
+                $display("    PASS: cfg_dirty cleared after dirty ack");
+
+            // Pending stays 1 after dirty ack
+            if (uut.cfg_req_pending !== 1'b1) begin
+                $display("    FAIL: cfg_req_pending = %0d (expected 1, dirty ack stays pending)",
+                         uut.cfg_req_pending);
+                cfg_failures = cfg_failures + 1;
+            end else
+                $display("    PASS: cfg_req_pending still 1 after dirty ack");
+
+            // Test 4: Second temporary ack with no dirty -> clear pending
+            $display("  Test 4: clean ack (no dirty writes)");
+            uut.cfg_tmp_ack = 1'b1;
+            @(posedge s00_axi_aclk);
+            uut.cfg_tmp_ack = 1'b0;
+            @(posedge s00_axi_aclk);
+
+            if (uut.cfg_req_pending !== 1'b0) begin
+                $display("    FAIL: cfg_req_pending = %0d (expected 0 after clean ack)",
+                         uut.cfg_req_pending);
+                cfg_failures = cfg_failures + 1;
+            end else
+                $display("    PASS: cfg_req_pending cleared after clean ack");
+
+            if (uut.cfg_dirty !== 1'b0) begin
+                $display("    FAIL: cfg_dirty = %0d (expected 0)", uut.cfg_dirty);
+                cfg_failures = cfg_failures + 1;
+            end else
+                $display("    PASS: cfg_dirty still 0");
+
+            // Test 5: Full two-phase sequence from idle
+            // Write (pending=1, dirty=0), write (dirty=1), ack dirty (re-publish), ack clean
+            $display("  Test 5: full two-phase sequence from idle");
+            write_register(7'h01, 32'd4000000);
+            @(posedge s00_axi_aclk);
+
+            if (uut.cfg_req_pending !== 1'b1) begin
+                $display("    FAIL: pending not set after write (expected 1)");
+                cfg_failures = cfg_failures + 1;
+            end else
+                $display("    PASS: pending set after first write");
+
+            if (uut.cfg_dirty !== 1'b0) begin
+                $display("    FAIL: dirty set on first write (expected 0)");
+                cfg_failures = cfg_failures + 1;
+            end else
+                $display("    PASS: dirty clear on first write");
+
+            // Write while pending -> dirty
+            write_register(7'h02, 32'h00007FFF);
+            @(posedge s00_axi_aclk);
+
+            if (uut.cfg_dirty !== 1'b1) begin
+                $display("    FAIL: dirty not set on second write (expected 1)");
+                cfg_failures = cfg_failures + 1;
+            end else
+                $display("    PASS: dirty set on write while pending");
+
+            // Ack while dirty -> re-publish, stay pending
+            uut.cfg_tmp_ack = 1'b1;
+            @(posedge s00_axi_aclk);
+            uut.cfg_tmp_ack = 1'b0;
+            @(posedge s00_axi_aclk);
+
+            if (uut.cfg_pub_frequency !== 32'd4000000) begin
+                $display("    FAIL: cfg_pub_frequency = 0x%08h (expected 0x%08h)",
+                         uut.cfg_pub_frequency, 32'd4000000);
+                cfg_failures = cfg_failures + 1;
+            end else
+                $display("    PASS: cfg_pub_frequency = 0x%08h after re-publish", uut.cfg_pub_frequency);
+
+            if (uut.cfg_pub_amplitude !== 32'h00007FFF) begin
+                $display("    FAIL: cfg_pub_amplitude = 0x%08h (expected 0x00007FFF)",
+                         uut.cfg_pub_amplitude);
+                cfg_failures = cfg_failures + 1;
+            end else
+                $display("    PASS: cfg_pub_amplitude = 0x%08h after re-publish", uut.cfg_pub_amplitude);
+
+            if (uut.cfg_req_pending !== 1'b1) begin
+                $display("    FAIL: pending = %0d (expected 1, stays pending after dirty ack)",
+                         uut.cfg_req_pending);
+                cfg_failures = cfg_failures + 1;
+            end else
+                $display("    PASS: pending still 1 after dirty ack");
+
+            if (uut.cfg_dirty !== 1'b0) begin
+                $display("    FAIL: dirty = %0d (expected 0 after dirty ack)", uut.cfg_dirty);
+                cfg_failures = cfg_failures + 1;
+            end else
+                $display("    PASS: dirty cleared after dirty ack");
+
+            // Final clean ack -> clear pending
+            uut.cfg_tmp_ack = 1'b1;
+            @(posedge s00_axi_aclk);
+            uut.cfg_tmp_ack = 1'b0;
+            @(posedge s00_axi_aclk);
+
+            if (uut.cfg_req_pending !== 1'b0) begin
+                $display("    FAIL: pending = %0d (expected 0 after final clean ack)",
+                         uut.cfg_req_pending);
+                cfg_failures = cfg_failures + 1;
+            end else
+                $display("    PASS: pending cleared after final clean ack");
+
+            if (cfg_failures > 0) begin
+                $display("  FAIL: %0d Step 2.5.3 test(s) failed", cfg_failures);
+                total_failures = total_failures + 1;
+            end else
+                $display("  PASS: All Step 2.5.3 publish bundle tests passed");
+        end
+
         // Step 2.4.5: Reset during partially complete AXI transactions
         $display("\nSTEP 2.4.5 - RESET DURING TRANSACTIONS:");
         $display("----------------------------------------");
@@ -1887,7 +2159,7 @@ module function_gen_to_dac_tb;
 
         // Summary
         $display("\n========================================");
-        $display("Step 2.2 + Step 2.3 + Step 2.4.1-2.4.5 + Step 2.5.1 Summary");
+        $display("Step 2.2 + Step 2.3 + Step 2.4.1-2.4.5 + Step 2.5.1-2.5.3 Summary");
         $display("========================================");
         $display("  AXIS tdata width: %0d bits (expected 160)", C_M00_AXIS_TDATA_WIDTH);
         $display("  Words per beat: %0d (expected 10)", WORDS_PER_BEAT);
@@ -1981,7 +2253,7 @@ module function_gen_to_dac_tb;
             $display("FAIL: %0d test(s) failed", total_failures);
             $fatal;
         end else begin
-            $display("PASS: All Step 2.2 + Step 2.3 + Step 2.4.1 + Step 2.4.2 + Step 2.4.3 + Step 2.4.4 + Step 2.4.5 + Step 2.5.1 tests passed");
+            $display("PASS: All Step 2.2 + Step 2.3 + Step 2.4.1 + Step 2.4.2 + Step 2.4.3 + Step 2.4.4 + Step 2.4.5 + Step 2.5.1 + Step 2.5.3 tests passed");
         end
         $display("========================================\n");
 
