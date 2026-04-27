@@ -371,7 +371,7 @@ module function_gen_to_dac_1_0 #
         end
     end
 
-    // AXI4-Lite interface (always-ready for now; hardened in Step 2.4)
+    // AXI4-Lite interface (hardened in Step 2.4)
     //
     // Register map (7-bit byte-addressable, little-endian):
     //   7'h00: waveform_type_ctrl  - Waveform type selection
@@ -382,20 +382,65 @@ module function_gen_to_dac_1_0 #
     //   7'h05: enable_ctrl         - Streaming enable ([0])
     //   All other addresses: read as 32'h0000_0000, writes are ignored
     //
-    assign s00_axi_awready = 1'b1;
-    assign s00_axi_wready  = 1'b1;
     assign s00_axi_bresp   = 2'b00;
     assign s00_axi_arready = 1'b1;
     assign s00_axi_rresp   = 2'b00;
 
-    // Write response valid signal
+    // Step 2.4.2: Independent AW/W acceptance with pending registers
+    // Pending AW channel
+    reg  [C_S00_AXI_ADDR_WIDTH-1:0] pending_aw_addr;
+    reg  pending_aw;
+
+    // Pending W channel
+    reg  [C_S00_AXI_DATA_WIDTH-1:0] pending_w_data;
+    reg  [(C_S00_AXI_DATA_WIDTH/8)-1:0] pending_w_strb;
+    reg  pending_w;
+
+    // Write response valid signal (declared before ready assigns)
     reg bvalid_reg;
-    always @(posedge s00_axi_aclk) begin
+
+    // Ready signals: accept when no pending channel and no outstanding response
+    assign s00_axi_awready = !pending_aw && !bvalid_reg;
+    assign s00_axi_wready  = !pending_w  && !bvalid_reg;
+
+     // Accept AW channel independently
+    always @(posedge s00_axi_aclk or negedge s00_axi_aresetn) begin
+        if (!s00_axi_aresetn) begin
+            pending_aw_addr <= {C_S00_AXI_ADDR_WIDTH{1'b0}};
+            pending_aw      <= 1'b0;
+        end else begin
+            if (s00_axi_awvalid && s00_axi_awready) begin
+                pending_aw_addr <= s00_axi_awaddr;
+                pending_aw      <= 1'b1;
+            end else if (bvalid_reg && s00_axi_bready) begin
+                pending_aw      <= 1'b0;
+            end
+        end
+    end
+
+    // Accept W channel independently
+    always @(posedge s00_axi_aclk or negedge s00_axi_aresetn) begin
+        if (!s00_axi_aresetn) begin
+            pending_w_data <= {C_S00_AXI_DATA_WIDTH{1'b0}};
+            pending_w_strb <= {(C_S00_AXI_DATA_WIDTH/8){1'b0}};
+            pending_w      <= 1'b0;
+        end else begin
+            if (s00_axi_wvalid && s00_axi_wready) begin
+                pending_w_data <= s00_axi_wdata;
+                pending_w_strb <= s00_axi_wstrb;
+                pending_w      <= 1'b1;
+            end else if (bvalid_reg && s00_axi_bready) begin
+                pending_w      <= 1'b0;
+            end
+        end
+    end
+
+  // Write response: assert BVALID when both AW and W are available (committed)
+    always @(posedge s00_axi_aclk or negedge s00_axi_aresetn) begin
         if (!s00_axi_aresetn) begin
             bvalid_reg <= 1'b0;
         end else begin
-            if (s00_axi_awvalid && s00_axi_awready &&
-                s00_axi_wvalid  && s00_axi_wready  && !bvalid_reg) begin
+            if (pending_aw && pending_w && !bvalid_reg) begin
                 bvalid_reg <= 1'b1;
             end else if (bvalid_reg && s00_axi_bready) begin
                 bvalid_reg <= 1'b0;
@@ -405,7 +450,7 @@ module function_gen_to_dac_1_0 #
 
     assign s00_axi_bvalid = bvalid_reg;
 
-    // Register write logic (7-bit address matching)
+    // Register write logic: commit when both AW and W are pending
     always @(posedge s00_axi_aclk or negedge s00_axi_aresetn) begin
         if (!s00_axi_aresetn) begin
             waveform_type_ctrl <= 32'h0;
@@ -414,14 +459,14 @@ module function_gen_to_dac_1_0 #
             phase_ctrl         <= 32'h0;
             offset_ctrl        <= 32'h0;
             enable_ctrl        <= 32'h0;
-        end else if (s00_axi_awvalid && s00_axi_wvalid) begin
-            case (s00_axi_awaddr[6:0])
-              7'h00: waveform_type_ctrl <= s00_axi_wdata;
-              7'h01: frequency_ctrl     <= s00_axi_wdata;
-              7'h02: amplitude_ctrl     <= s00_axi_wdata;
-              7'h03: phase_ctrl         <= s00_axi_wdata;
-              7'h04: offset_ctrl        <= s00_axi_wdata;
-              7'h05: enable_ctrl        <= s00_axi_wdata;
+        end else if (pending_aw && pending_w) begin
+            case (pending_aw_addr[6:0])
+              7'h00: waveform_type_ctrl <= pending_w_data;
+              7'h01: frequency_ctrl     <= pending_w_data;
+              7'h02: amplitude_ctrl     <= pending_w_data;
+              7'h03: phase_ctrl         <= pending_w_data;
+              7'h04: offset_ctrl        <= pending_w_data;
+              7'h05: enable_ctrl        <= pending_w_data;
               default: ;
             endcase
         end

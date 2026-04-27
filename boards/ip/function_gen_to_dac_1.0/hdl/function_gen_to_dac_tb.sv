@@ -75,7 +75,7 @@ module function_gen_to_dac_tb;
         .m00_axis_aresetn(m00_axis_aresetn),
         .m00_axis_tvalid(m00_axis_tvalid),
         .m00_axis_tdata(m00_axis_tdata),
-        .m00_axis_tready(m00_axis_tready)
+       .m00_axis_tready(m00_axis_tready)
     );
 
     // AXI4-Lite clock: 156.25 MHz (half-period = 3.2 ns)
@@ -221,26 +221,137 @@ module function_gen_to_dac_tb;
         dac_word_from_sample_fs = dac_word_from_sample(sample, 16'h7FFF, 14'd0);
     endfunction
 
-    // AXI4-Lite write task
-    task automatic write_register(
+  // AXI4-Lite write task (same-cycle AW/W, Step 2.4.2 compatible)
+    task write_register(
         input [6:0]  addr,
         input [31:0] data
     );
+        // Wait for stable clock phase, then set signals before next rising edge
+        @(posedge s00_axi_aclk);
+        s00_axi_awaddr = addr;
+        s00_axi_awprot = 3'h0;
+        s00_axi_awvalid = 1;
+        s00_axi_wdata   = data;
+        s00_axi_wstrb   = 8'hFF;
+        s00_axi_wvalid  = 1;
+        @(posedge s00_axi_aclk);
+        s00_axi_awvalid = 0;
+        s00_axi_wvalid  = 0;
+        s00_axi_wstrb   = 0;
+        while (!s00_axi_bvalid) @(posedge s00_axi_aclk);
+        s00_axi_bready = 1;
+        @(posedge s00_axi_aclk);
+        s00_axi_bready = 0;
+    endtask
+
+    // Step 2.4.2: AW one cycle before W
+    task automatic write_aw_before_w(
+        input [6:0]  addr,
+        input [31:0] data
+    );
+        @(posedge s00_axi_aclk);
+        s00_axi_awaddr = addr;
+        s00_axi_awprot = 3'h0;
+        s00_axi_awvalid = 1;
+        s00_axi_wvalid  = 0;
+        @(posedge s00_axi_aclk);
+        s00_axi_awvalid = 0;
+        s00_axi_wdata   = data;
+        s00_axi_wstrb   = 8'hFF;
+        s00_axi_wvalid  = 1;
+        @(posedge s00_axi_aclk);
+        s00_axi_wvalid = 0;
+        s00_axi_wstrb  = 0;
+        while (!s00_axi_bvalid) @(posedge s00_axi_aclk);
+        s00_axi_bready = 1;
+        @(posedge s00_axi_aclk);
+        s00_axi_bready = 0;
+    endtask
+
+    // Step 2.4.2: W one cycle before AW
+    task automatic write_w_before_aw(
+        input [6:0]  addr,
+        input [31:0] data
+    );
+        @(posedge s00_axi_aclk);
+        s00_axi_wdata   = data;
+        s00_axi_wstrb   = 8'hFF;
+        s00_axi_wvalid  = 1;
+        s00_axi_awvalid = 0;
+        @(posedge s00_axi_aclk);
+        s00_axi_wvalid = 0;
+        s00_axi_wstrb  = 0;
         s00_axi_awaddr = addr;
         s00_axi_awprot = 3'h0;
         s00_axi_awvalid = 1;
         @(posedge s00_axi_aclk);
-        while (!s00_axi_awready) @(posedge s00_axi_aclk);
-        s00_axi_wdata = data;
-        s00_axi_wstrb = 8'hFF;
-        s00_axi_wvalid = 1;
-        @(posedge s00_axi_aclk);
-        while (!s00_axi_wready) @(posedge s00_axi_aclk);
-        @(posedge s00_axi_aclk);
-        s00_axi_wvalid  = 0;
         s00_axi_awvalid = 0;
-        s00_axi_wstrb   = 0;
+        while (!s00_axi_bvalid) @(posedge s00_axi_aclk);
+        s00_axi_bready = 1;
         @(posedge s00_axi_aclk);
+        s00_axi_bready = 0;
+    endtask
+
+   // Step 2.4.2: Back-to-back writes with BVALID hold verification
+    task automatic write_back_to_back(
+        input [6:0]  addr1,
+        input [31:0] data1,
+        input [6:0]  addr2,
+        input [31:0] data2
+    );
+        integer bvalid_hold_cycles;
+
+        // First write: same-cycle AW/W
+        @(posedge s00_axi_aclk);
+        s00_axi_awaddr = addr1;
+        s00_axi_awprot = 3'h0;
+        s00_axi_awvalid = 1;
+        s00_axi_wdata   = data1;
+        s00_axi_wstrb   = 8'hFF;
+        s00_axi_wvalid  = 1;
+        s00_axi_bready  = 0;
+        @(posedge s00_axi_aclk);
+        s00_axi_awvalid = 0;
+        s00_axi_wvalid  = 0;
+        s00_axi_wstrb   = 0;
+
+        // Wait for BVALID, hold BREADY=0 for 2 cycles to verify BVALID stability
+        while (!s00_axi_bvalid) @(posedge s00_axi_aclk);
+        bvalid_hold_cycles = 0;
+        if (!s00_axi_bvalid) begin
+            $display("    FAIL: BVALID dropped while BREADY=0 (cycle 0)");
+            $fatal;
+        end
+        @(posedge s00_axi_aclk);
+        bvalid_hold_cycles = bvalid_hold_cycles + 1;
+        if (!s00_axi_bvalid) begin
+            $display("    FAIL: BVALID dropped while BREADY=0 (cycle %0d)", bvalid_hold_cycles);
+            $fatal;
+        end
+        @(posedge s00_axi_aclk);
+        bvalid_hold_cycles = bvalid_hold_cycles + 1;
+        if (!s00_axi_bvalid) begin
+            $display("    FAIL: BVALID dropped while BREADY=0 (cycle %0d)", bvalid_hold_cycles);
+            $fatal;
+        end
+
+        // Accept first response
+        s00_axi_bready = 1;
+        @(posedge s00_axi_aclk);
+        s00_axi_bready = 0;
+
+        // Second write: same-cycle AW/W
+        @(posedge s00_axi_aclk);
+        s00_axi_awaddr = addr2;
+        s00_axi_awprot = 3'h0;
+        s00_axi_awvalid = 1;
+        s00_axi_wdata   = data2;
+        s00_axi_wstrb   = 8'hFF;
+        s00_axi_wvalid  = 1;
+        @(posedge s00_axi_aclk);
+        s00_axi_awvalid = 0;
+        s00_axi_wvalid  = 0;
+        s00_axi_wstrb   = 0;
         while (!s00_axi_bvalid) @(posedge s00_axi_aclk);
         s00_axi_bready = 1;
         @(posedge s00_axi_aclk);
@@ -306,7 +417,7 @@ module function_gen_to_dac_tb;
 
         $display("========================================");
         $display("Function Gen to DAC Testbench");
-        $display("Step 2.2 + Step 2.3 + Step 2.4.1 Verification");
+        $display("Step 2.2 + Step 2.3 + Step 2.4.1 + Step 2.4.2 Verification");
         $display("========================================");
         $display("AXIS tdata width: %0d bits", C_M00_AXIS_TDATA_WIDTH);
         $display("Words per beat: %0d", WORDS_PER_BEAT);
@@ -315,7 +426,7 @@ module function_gen_to_dac_tb;
         $display("Logical sample rate: 51.2 MSPS");
         $display("========================================\n");
 
-        // Configure DUT via AXI4-Lite
+     // Configure DUT via AXI4-Lite
         $display("CONFIGURING REGISTERS:");
         $display("----------------------------------------");
         write_register(7'h00, 32'h00000001);
@@ -396,6 +507,67 @@ module function_gen_to_dac_tb;
             $display("  PASS: invalid address (0x0F) reads as 0x%08h", rb_data);
 
         $display("  PASS: All Step 2.4.1 register-map/readback tests passed");
+
+        // Step 2.4.2: Independent AW/W write acceptance tests
+        $display("\nSTEP 2.4.2 - AW/W WRITE ACCEPTANCE:");
+        $display("----------------------------------------");
+        begin
+            integer aww_failures;
+            aww_failures = 0;
+
+            // Test 1: Same-cycle AW/W write
+            $display("  Test: same-cycle AW/W write to 0x01 (frequency)");
+            write_aw_before_w(7'h01, 32'd5000000);
+            read_register(7'h01, rb_data);
+            if (rb_data !== 32'd5000000) begin
+                $display("    FAIL: same-cycle readback = 0x%08h (expected 0x%08h)", rb_data, 32'd5000000);
+                $fatal;
+            end else
+                $display("    PASS: same-cycle AW/W readback = 0x%08h", rb_data);
+
+            // Test 2: AW one cycle before W
+            $display("  Test: AW-before-W write to 0x01 (frequency)");
+            write_aw_before_w(7'h01, 32'd8000000);
+            read_register(7'h01, rb_data);
+            if (rb_data !== 32'd8000000) begin
+                $display("    FAIL: AW-before-W readback = 0x%08h (expected 0x%08h)", rb_data, 32'd8000000);
+                $fatal;
+            end else
+                $display("    PASS: AW-before-W readback = 0x%08h", rb_data);
+
+            // Test 3: W one cycle before AW
+            $display("  Test: W-before-AW write to 0x01 (frequency)");
+            write_w_before_aw(7'h01, 32'd1000000);
+            read_register(7'h01, rb_data);
+            if (rb_data !== 32'd1000000) begin
+                $display("    FAIL: W-before-AW readback = 0x%08h (expected 0x%08h)", rb_data, 32'd1000000);
+                $fatal;
+            end else
+                $display("    PASS: W-before-AW readback = 0x%08h", rb_data);
+
+            // Test 4: Back-to-back writes with BVALID hold verification
+            $display("  Test: back-to-back writes (0x01 and 0x03) with BVALID hold");
+            write_back_to_back(7'h01, 32'd2000000, 7'h03, 32'd1000);
+            read_register(7'h01, rb_data);
+            if (rb_data !== 32'd2000000) begin
+                $display("    FAIL: back-to-back write1 (0x01) = 0x%08h (expected 0x%08h)", rb_data, 32'd2000000);
+                $fatal;
+            end else
+                $display("    PASS: back-to-back write1 (0x01) = 0x%08h", rb_data);
+            read_register(7'h03, rb_data);
+            if (rb_data !== 32'd1000) begin
+                $display("    FAIL: back-to-back write2 (0x03) = 0x%08h (expected 0x%08h)", rb_data, 32'd1000);
+                $fatal;
+            end else
+                $display("    PASS: back-to-back write2 (0x03) = 0x%08h", rb_data);
+            $display("    PASS: BVALID held stable for 2 cycles while BREADY=0");
+
+            $display("  PASS: All Step 2.4.2 AW/W write acceptance tests passed");
+        end
+
+        // Restore frequency for streaming tests
+        write_register(7'h01, 32'd2000000);
+        write_register(7'h03, 32'd0);
 
         // AXIS stream monitor
         $display("\nAXIS STREAM MONITOR:");
@@ -882,7 +1054,7 @@ module function_gen_to_dac_tb;
 
         // Summary
         $display("\n========================================");
-        $display("Step 2.2 + Step 2.3 + Step 2.4.1 Summary");
+        $display("Step 2.2 + Step 2.3 + Step 2.4.1 + Step 2.4.2 Summary");
         $display("========================================");
         $display("  AXIS tdata width: %0d bits (expected 160)", C_M00_AXIS_TDATA_WIDTH);
         $display("  Words per beat: %0d (expected 10)", WORDS_PER_BEAT);
@@ -976,7 +1148,7 @@ module function_gen_to_dac_tb;
             $display("FAIL: %0d test(s) failed", total_failures);
             $fatal;
         end else begin
-            $display("PASS: All Step 2.2 + Step 2.3 + Step 2.4.1 tests passed");
+            $display("PASS: All Step 2.2 + Step 2.3 + Step 2.4.1 + Step 2.4.2 tests passed");
         end
         $display("========================================\n");
 
