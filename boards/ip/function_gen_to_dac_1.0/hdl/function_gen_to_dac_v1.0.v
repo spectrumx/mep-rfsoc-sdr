@@ -399,7 +399,6 @@ module function_gen_to_dac_1_0 #
     //   All other addresses: read as 32'h0000_0000, writes are ignored
     //
     assign s00_axi_bresp   = 2'b00;
-    assign s00_axi_arready = 1'b1;
     assign s00_axi_rresp   = 2'b00;
 
     // Step 2.4.2: Independent AW/W acceptance with pending registers
@@ -489,14 +488,24 @@ module function_gen_to_dac_1_0 #
         end
     end
 
-    // Register read logic
-    reg rvalid_reg;
+    // Register read logic (Step 2.4.4 hardened)
+    // Latches ARADDR on acceptance, holds RVALID/RDATA/RRESP stable while !RREADY,
+    // and blocks new reads from overwriting a pending response.
+    reg  [C_S00_AXI_ADDR_WIDTH-1:0] araddr_latch;
+    reg  rvalid_reg;
+
+    // ARREADY: only accept when no read response is pending
+    assign s00_axi_arready = !rvalid_reg;
+
     always @(posedge s00_axi_aclk or negedge s00_axi_aresetn) begin
         if (!s00_axi_aresetn) begin
+            araddr_latch <= {C_S00_AXI_ADDR_WIDTH{1'b0}};
             s00_axi_rdata <= 32'h0;
             rvalid_reg    <= 1'b0;
         end else begin
+            // Accept a new read request
             if (s00_axi_arvalid && s00_axi_arready) begin
+                araddr_latch <= s00_axi_araddr;
                 case (s00_axi_araddr[6:0])
                   7'h00: s00_axi_rdata <= waveform_type_ctrl;
                   7'h01: s00_axi_rdata <= frequency_ctrl;
@@ -508,6 +517,7 @@ module function_gen_to_dac_1_0 #
                 endcase
             end
 
+            // RVALID handshake: assert on read acceptance, deassert on RREADY
             if (rvalid_reg && s00_axi_rready) begin
                 rvalid_reg <= 1'b0;
             end else if (s00_axi_arvalid && s00_axi_arready) begin
