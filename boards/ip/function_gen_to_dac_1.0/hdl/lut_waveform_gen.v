@@ -44,6 +44,10 @@ module lut_waveform_gen #
     // multiple instances. Default 0.
     input wire [PHASE_WIDTH-1:0] phase_step_offset,
 
+    // Enable input: when 0, resets phase accumulator for deterministic restart.
+    // When 1, phase accumulator advances normally.
+    input wire en,
+
     // Output sine and cosine values (signed, DATA_WIDTH bits)
     // Range: -8192 to +8191. Positive peak clamped to +8191, negative peak to -8192.
     output reg signed [DATA_WIDTH-1:0] sine_out,
@@ -67,8 +71,12 @@ module lut_waveform_gen #
     assign phase_increment = phase_increment_64[PHASE_WIDTH-1:0];
     
     // Phase accumulator update
+    // When en=0, accumulator resets to 0 for deterministic phase restart.
+    // When en=1, accumulator advances by phase_increment each clock.
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
+            phase_accum <= {PHASE_WIDTH{1'b0}};
+        end else if (!en) begin
             phase_accum <= {PHASE_WIDTH{1'b0}};
         end else begin
             phase_accum <= phase_accum + phase_increment;

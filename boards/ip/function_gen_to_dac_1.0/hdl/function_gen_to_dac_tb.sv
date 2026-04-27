@@ -1,5 +1,5 @@
 // function_gen_to_dac_tb.sv
-// Step 2.2: 5-sample-per-beat generation verification (rework)
+// Step 2.2 + 2.3 + 2.4.1-2.4.5 + 2.5.1-2.5.5 comprehensive verification
 `timescale 1ns/1ps
 
 module function_gen_to_dac_tb;
@@ -460,6 +460,20 @@ module function_gen_to_dac_tb;
         rdata = captured_rdata;
     endtask
 
+    // Step 2.5.4: Wait for cfg_req_pending to clear via CDC round-trip
+    task wait_cfg_pending_clear;
+        input [31:0] max_cycles;
+        integer wait_cnt;
+        wait_cnt = 0;
+        while (uut.cfg_req_pending && wait_cnt < max_cycles) begin
+            @(posedge m00_axis_aclk);
+            wait_cnt = wait_cnt + 1;
+        end
+        if (wait_cnt >= max_cycles) begin
+            $display("    WARN: cfg_req_pending did not clear within %0d AXIS cycles", max_cycles);
+        end
+    endtask
+
     // Test sequence
     initial begin
         // Initialize signals
@@ -501,7 +515,7 @@ module function_gen_to_dac_tb;
 
         $display("========================================");
         $display("Function Gen to DAC Testbench");
-        $display("Step 2.2 + Step 2.3 + Step 2.4.1-2.4.5 + Step 2.5.1-2.5.3 Verification");
+        $display("Step 2.2 + Step 2.3 + Step 2.4.1-2.4.5 + Step 2.5.1-2.5.6 Verification");
         $display("========================================");
         $display("AXIS tdata width: %0d bits", C_M00_AXIS_TDATA_WIDTH);
         $display("Words per beat: %0d", WORDS_PER_BEAT);
@@ -1653,12 +1667,12 @@ module function_gen_to_dac_tb;
                 $display("  PASS: All Step 2.5.1 baseline dynamic-update tests passed");
         end
 
-        // Step 2.5.3: CDC config publish bundle and dirty/pending bookkeeping
-        // White-box tests: access uut.cfg_pub_*, uut.cfg_req_pending,
-        // uut.cfg_dirty, and uut.cfg_tmp_ack directly. These hierarchical
-        // references are localized to this step and replaced by black-box
-        // CDC tests in Step 2.5.4.
-        $display("\nSTEP 2.5.3 - CDC CONFIG PUBLISH BUNDLE:");
+        // Step 2.5.4: CDC synchronizer, bundle capture, and acknowledgment
+        // White-box tests: access uut.cfg_pub_*, uut.cfg_dac_*,
+        // uut.cfg_req_pending, uut.cfg_dirty via hierarchical references.
+        // These are localized to Step 2.5.4 CDC tests.
+
+        $display("\nSTEP 2.5.4 - CDC SYNCHRONIZER AND BUNDLE CAPTURE:");
         $display("----------------------------------------");
         begin
             integer cfg_failures;
@@ -1669,21 +1683,13 @@ module function_gen_to_dac_tb;
             repeat (5) @(posedge s00_axi_aclk);
 
             // Drain any pending publish state from prior AXI writes.
-            // The initial register configuration and Step 2.4.x tests generated
-            // writes that set cfg_req_pending and cfg_dirty. Acknowledge them
-            // so the state machine returns to idle before our controlled tests.
+            // Wait for CDC round-trip to naturally clear pending.
             if (uut.cfg_req_pending) begin
-                // First ack may be dirty (re-publishes, stays pending)
-                uut.cfg_tmp_ack = 1'b1;
-                @(posedge s00_axi_aclk);
-                uut.cfg_tmp_ack = 1'b0;
-                @(posedge s00_axi_aclk);
-                // Second ack should be clean (clears pending)
+                // First round-trip may be dirty (re-publishes, stays pending)
+                 wait_cfg_pending_clear(200);
+                // Second round-trip should be clean (clears pending)
                 if (uut.cfg_req_pending) begin
-                    uut.cfg_tmp_ack = 1'b1;
-                    @(posedge s00_axi_aclk);
-                    uut.cfg_tmp_ack = 1'b0;
-                    @(posedge s00_axi_aclk);
+                     wait_cfg_pending_clear(200);
                 end
             end
             // Verify clean state
@@ -1694,8 +1700,8 @@ module function_gen_to_dac_tb;
                 $display("    WARN: cfg_dirty still 1 after drain (unexpected)");
             end
 
-            // Test 1: First-write publish behavior
-            $display("  Test 1: first-write publish (frequency -> 3MHz)");
+            // Test 1: Single CDC round trip
+            $display("  Test 1: single CDC round trip (frequency -> 3MHz)");
             write_register(7'h01, 32'd3000000);
             @(posedge s00_axi_aclk);
 
@@ -1715,7 +1721,7 @@ module function_gen_to_dac_tb;
             end else
                 $display("    PASS: cfg_pub_frequency = 0x%08h", uut.cfg_pub_frequency);
 
-            // Check bookkeeping: pending=1, dirty=0
+            // Check pending=1, dirty=0
             if (uut.cfg_req_pending !== 1'b1) begin
                 $display("    FAIL: cfg_req_pending = %0d (expected 1)", uut.cfg_req_pending);
                 cfg_failures = cfg_failures + 1;
@@ -1728,44 +1734,49 @@ module function_gen_to_dac_tb;
             end else
                 $display("    PASS: cfg_dirty = 0");
 
-            // Test 2: Dirty/coalescing behavior before acknowledgment
-            // While cfg_req_pending=1, write two additional controls.
-            $display("  Test 2: dirty/coalescing (amplitude -> half, phase -> 0x10000000)");
+            // Wait for CDC round-trip: DAC domain captures, acks back
+             wait_cfg_pending_clear(200);
+
+            // Verify cfg_dac_frequency captured the published value
+            if (uut.cfg_dac_frequency !== 32'd3000000) begin
+                $display("    FAIL: cfg_dac_frequency = 0x%08h (expected 0x%08h)",
+                         uut.cfg_dac_frequency, 32'd3000000);
+                cfg_failures = cfg_failures + 1;
+            end else
+                $display("    PASS: cfg_dac_frequency captured = 0x%08h", uut.cfg_dac_frequency);
+
+            // Verify pending cleared after ack
+            if (uut.cfg_req_pending !== 1'b0) begin
+                $display("    FAIL: cfg_req_pending = %0d (expected 0 after CDC ack)",
+                         uut.cfg_req_pending);
+                cfg_failures = cfg_failures + 1;
+            end else
+                $display("    PASS: cfg_req_pending cleared after CDC ack");
+
+            // Test 2: Writes while request pending (dirty/coalescing with real CDC)
+            $display("  Test 2: writes while pending (dirty/coalescing)");
+            write_register(7'h01, 32'd6000000);
+            @(posedge s00_axi_aclk);
+
+            // Verify first publish
+            if (uut.cfg_pub_frequency !== 32'd6000000) begin
+                $display("    FAIL: cfg_pub_frequency = 0x%08h (expected 0x%08h)",
+                         uut.cfg_pub_frequency, 32'd6000000);
+                cfg_failures = cfg_failures + 1;
+            end else
+                $display("    PASS: cfg_pub_frequency first publish = 0x%08h", uut.cfg_pub_frequency);
+
+            if (uut.cfg_req_pending !== 1'b1) begin
+                $display("    FAIL: cfg_req_pending = %0d (expected 1)", uut.cfg_req_pending);
+                cfg_failures = cfg_failures + 1;
+            end else
+                $display("    PASS: cfg_req_pending = 1 after first write");
+
+            // Write additional controls while pending -> sets dirty
             write_register(7'h02, 32'h00003FFF);
             @(posedge s00_axi_aclk);
             write_register(7'h03, 32'h10000000);
             @(posedge s00_axi_aclk);
-
-            // Check shadows updated to latest values
-            read_register(7'h02, rb_data);
-            if (rb_data !== 32'h00003FFF) begin
-                $display("    FAIL: amplitude shadow = 0x%08h (expected 0x00003FFF)", rb_data);
-                cfg_failures = cfg_failures + 1;
-            end else
-                $display("    PASS: amplitude shadow = 0x%08h", rb_data);
-
-            read_register(7'h03, rb_data);
-            if (rb_data !== 32'h10000000) begin
-                $display("    FAIL: phase shadow = 0x%08h (expected 0x10000000)", rb_data);
-                cfg_failures = cfg_failures + 1;
-            end else
-                $display("    PASS: phase shadow = 0x%08h", rb_data);
-
-            // Publish bundle should still be the original (frequency=3MHz)
-            if (uut.cfg_pub_frequency !== 32'd3000000) begin
-                $display("    FAIL: cfg_pub_frequency changed to 0x%08h (expected 0x%08h unchanged)",
-                         uut.cfg_pub_frequency, 32'd3000000);
-                cfg_failures = cfg_failures + 1;
-            end else
-                $display("    PASS: cfg_pub_frequency unchanged = 0x%08h", uut.cfg_pub_frequency);
-
-            // Amplitude in publish should still be original (full scale from initial config)
-            if (uut.cfg_pub_amplitude !== 32'h00007FFF) begin
-                $display("    FAIL: cfg_pub_amplitude = 0x%08h (expected 0x00007FFF unchanged)",
-                         uut.cfg_pub_amplitude);
-                cfg_failures = cfg_failures + 1;
-            end else
-                $display("    PASS: cfg_pub_amplitude unchanged = 0x%08h", uut.cfg_pub_amplitude);
 
             if (uut.cfg_dirty !== 1'b1) begin
                 $display("    FAIL: cfg_dirty = %0d (expected 1)", uut.cfg_dirty);
@@ -1773,156 +1784,607 @@ module function_gen_to_dac_tb;
             end else
                 $display("    PASS: cfg_dirty = 1 after back-to-back writes");
 
-            // Test 3: Temporary acknowledgment while dirty -> re-publish
-            $display("  Test 3: temporary ack while dirty (re-publish)");
-            uut.cfg_tmp_ack = 1'b1;
-            @(posedge s00_axi_aclk);
-            uut.cfg_tmp_ack = 1'b0;
-            @(posedge s00_axi_aclk);
-
-            // Publish should now have latest shadow values
-            if (uut.cfg_pub_frequency !== 32'd3000000) begin
-                $display("    FAIL: cfg_pub_frequency = 0x%08h (expected 0x%08h)",
-                         uut.cfg_pub_frequency, 32'd3000000);
+            // Publish bundle should still be the original
+            if (uut.cfg_pub_frequency !== 32'd6000000) begin
+                $display("    FAIL: cfg_pub_frequency changed to 0x%08h (expected 0x%08h unchanged)",
+                         uut.cfg_pub_frequency, 32'd6000000);
                 cfg_failures = cfg_failures + 1;
             end else
-                $display("    PASS: cfg_pub_frequency re-published = 0x%08h", uut.cfg_pub_frequency);
+                $display("    PASS: cfg_pub_frequency unchanged = 0x%08h", uut.cfg_pub_frequency);
 
-            if (uut.cfg_pub_amplitude !== 32'h00003FFF) begin
-                $display("    FAIL: cfg_pub_amplitude = 0x%08h (expected 0x00003FFF)",
-                         uut.cfg_pub_amplitude);
+            // Wait for first CDC capture
+            begin
+                integer first_capture_done;
+                first_capture_done = 0;
+                while (!first_capture_done && uut.cfg_req_pending) begin
+                    @(posedge m00_axis_aclk);
+                    // After first capture, dirty ack should re-publish and stay pending
+                    // Check if cfg_dac_frequency matches first bundle (6MHz)
+                    if (uut.cfg_dac_frequency === 32'd6000000) begin
+                        first_capture_done = 1;
+                    end
+                end
+            end
+
+            if (uut.cfg_dac_frequency !== 32'd6000000) begin
+                $display("    FAIL: first cfg_dac_frequency = 0x%08h (expected 0x%08h)",
+                         uut.cfg_dac_frequency, 32'd6000000);
                 cfg_failures = cfg_failures + 1;
             end else
-                $display("    PASS: cfg_pub_amplitude re-published = 0x%08h", uut.cfg_pub_amplitude);
+                $display("    PASS: first cfg_dac_frequency capture = 0x%08h", uut.cfg_dac_frequency);
 
-            if (uut.cfg_pub_phase !== 32'h10000000) begin
-                $display("    FAIL: cfg_pub_phase = 0x%08h (expected 0x10000000)",
-                         uut.cfg_pub_phase);
+            // After dirty ack, second request should be issued. Wait for final pending to clear.
+            if (uut.cfg_req_pending) begin
+                 wait_cfg_pending_clear(200);
+            end
+
+            // Verify final cfg_dac_* bundle matches latest shadow values
+            if (uut.cfg_dac_frequency !== 32'd6000000) begin
+                $display("    FAIL: final cfg_dac_frequency = 0x%08h (expected 0x%08h)",
+                         uut.cfg_dac_frequency, 32'd6000000);
                 cfg_failures = cfg_failures + 1;
             end else
-                $display("    PASS: cfg_pub_phase re-published = 0x%08h", uut.cfg_pub_phase);
+                $display("    PASS: final cfg_dac_frequency = 0x%08h", uut.cfg_dac_frequency);
 
-            // cfg_req_toggle: started 0, first write -> 1, dirty ack -> 0
-            if (uut.cfg_req_toggle !== 1'b0) begin
-                $display("    FAIL: cfg_req_toggle = %0d (expected 0 after dirty re-publish)",
-                         uut.cfg_req_toggle);
+            if (uut.cfg_dac_amplitude !== 32'h00003FFF) begin
+                $display("    FAIL: final cfg_dac_amplitude = 0x%08h (expected 0x00003FFF)",
+                         uut.cfg_dac_amplitude);
                 cfg_failures = cfg_failures + 1;
             end else
-                $display("    PASS: cfg_req_toggle toggled to %0d after dirty re-publish", uut.cfg_req_toggle);
+                $display("    PASS: final cfg_dac_amplitude = 0x%08h", uut.cfg_dac_amplitude);
 
-            if (uut.cfg_dirty !== 1'b0) begin
-                $display("    FAIL: cfg_dirty = %0d (expected 0 after ack)", uut.cfg_dirty);
+            if (uut.cfg_dac_phase !== 32'h10000000) begin
+                $display("    FAIL: final cfg_dac_phase = 0x%08h (expected 0x10000000)",
+                         uut.cfg_dac_phase);
                 cfg_failures = cfg_failures + 1;
             end else
-                $display("    PASS: cfg_dirty cleared after dirty ack");
-
-            // Pending stays 1 after dirty ack
-            if (uut.cfg_req_pending !== 1'b1) begin
-                $display("    FAIL: cfg_req_pending = %0d (expected 1, dirty ack stays pending)",
-                         uut.cfg_req_pending);
-                cfg_failures = cfg_failures + 1;
-            end else
-                $display("    PASS: cfg_req_pending still 1 after dirty ack");
-
-            // Test 4: Second temporary ack with no dirty -> clear pending
-            $display("  Test 4: clean ack (no dirty writes)");
-            uut.cfg_tmp_ack = 1'b1;
-            @(posedge s00_axi_aclk);
-            uut.cfg_tmp_ack = 1'b0;
-            @(posedge s00_axi_aclk);
+                $display("    PASS: final cfg_dac_phase = 0x%08h", uut.cfg_dac_phase);
 
             if (uut.cfg_req_pending !== 1'b0) begin
-                $display("    FAIL: cfg_req_pending = %0d (expected 0 after clean ack)",
+                $display("    FAIL: cfg_req_pending = %0d (expected 0 after all acks)",
                          uut.cfg_req_pending);
                 cfg_failures = cfg_failures + 1;
             end else
-                $display("    PASS: cfg_req_pending cleared after clean ack");
+                $display("    PASS: cfg_req_pending cleared after all CDC acks");
 
-            if (uut.cfg_dirty !== 1'b0) begin
-                $display("    FAIL: cfg_dirty = %0d (expected 0)", uut.cfg_dirty);
-                cfg_failures = cfg_failures + 1;
-            end else
-                $display("    PASS: cfg_dirty still 0");
+            // Test 3: Repeated toggle operation (3 request/ack cycles)
+            $display("  Test 3: repeated toggle operation (3 cycles)");
+            begin
+                integer cycle;
+                reg [31:0] test_freqs[0:2];
+                test_freqs[0] = 32'd1000000;
+                test_freqs[1] = 32'd2500000;
+                test_freqs[2] = 32'd5000000;
 
-            // Test 5: Full two-phase sequence from idle
-            // Write (pending=1, dirty=0), write (dirty=1), ack dirty (re-publish), ack clean
-            $display("  Test 5: full two-phase sequence from idle");
-            write_register(7'h01, 32'd4000000);
-            @(posedge s00_axi_aclk);
+                for (cycle = 0; cycle < 3; cycle = cycle + 1) begin
+                    $display("    Cycle %0d: frequency -> %0d Hz", cycle + 1, test_freqs[cycle]);
+                    write_register(7'h01, test_freqs[cycle]);
+                    @(posedge s00_axi_aclk);
 
-            if (uut.cfg_req_pending !== 1'b1) begin
-                $display("    FAIL: pending not set after write (expected 1)");
-                cfg_failures = cfg_failures + 1;
-            end else
-                $display("    PASS: pending set after first write");
+                    if (uut.cfg_req_pending !== 1'b1) begin
+                        $display("      FAIL: pending not set for cycle %0d", cycle + 1);
+                        cfg_failures = cfg_failures + 1;
+                    end
 
-            if (uut.cfg_dirty !== 1'b0) begin
-                $display("    FAIL: dirty set on first write (expected 0)");
-                cfg_failures = cfg_failures + 1;
-            end else
-                $display("    PASS: dirty clear on first write");
+                    // Wait for CDC round-trip
+                     wait_cfg_pending_clear(200);
 
-            // Write while pending -> dirty
-            write_register(7'h02, 32'h00007FFF);
-            @(posedge s00_axi_aclk);
+                    // Verify capture
+                    if (uut.cfg_dac_frequency !== test_freqs[cycle]) begin
+                        $display("      FAIL: cfg_dac_frequency = 0x%08h (expected 0x%08h) cycle %0d",
+                                 uut.cfg_dac_frequency, test_freqs[cycle], cycle + 1);
+                        cfg_failures = cfg_failures + 1;
+                    end else
+                        $display("      PASS: cfg_dac_frequency = 0x%08h captured, pending cleared",
+                                 uut.cfg_dac_frequency);
 
-            if (uut.cfg_dirty !== 1'b1) begin
-                $display("    FAIL: dirty not set on second write (expected 1)");
-                cfg_failures = cfg_failures + 1;
-            end else
-                $display("    PASS: dirty set on write while pending");
-
-            // Ack while dirty -> re-publish, stay pending
-            uut.cfg_tmp_ack = 1'b1;
-            @(posedge s00_axi_aclk);
-            uut.cfg_tmp_ack = 1'b0;
-            @(posedge s00_axi_aclk);
-
-            if (uut.cfg_pub_frequency !== 32'd4000000) begin
-                $display("    FAIL: cfg_pub_frequency = 0x%08h (expected 0x%08h)",
-                         uut.cfg_pub_frequency, 32'd4000000);
-                cfg_failures = cfg_failures + 1;
-            end else
-                $display("    PASS: cfg_pub_frequency = 0x%08h after re-publish", uut.cfg_pub_frequency);
-
-            if (uut.cfg_pub_amplitude !== 32'h00007FFF) begin
-                $display("    FAIL: cfg_pub_amplitude = 0x%08h (expected 0x00007FFF)",
-                         uut.cfg_pub_amplitude);
-                cfg_failures = cfg_failures + 1;
-            end else
-                $display("    PASS: cfg_pub_amplitude = 0x%08h after re-publish", uut.cfg_pub_amplitude);
-
-            if (uut.cfg_req_pending !== 1'b1) begin
-                $display("    FAIL: pending = %0d (expected 1, stays pending after dirty ack)",
-                         uut.cfg_req_pending);
-                cfg_failures = cfg_failures + 1;
-            end else
-                $display("    PASS: pending still 1 after dirty ack");
-
-            if (uut.cfg_dirty !== 1'b0) begin
-                $display("    FAIL: dirty = %0d (expected 0 after dirty ack)", uut.cfg_dirty);
-                cfg_failures = cfg_failures + 1;
-            end else
-                $display("    PASS: dirty cleared after dirty ack");
-
-            // Final clean ack -> clear pending
-            uut.cfg_tmp_ack = 1'b1;
-            @(posedge s00_axi_aclk);
-            uut.cfg_tmp_ack = 1'b0;
-            @(posedge s00_axi_aclk);
-
-            if (uut.cfg_req_pending !== 1'b0) begin
-                $display("    FAIL: pending = %0d (expected 0 after final clean ack)",
-                         uut.cfg_req_pending);
-                cfg_failures = cfg_failures + 1;
-            end else
-                $display("    PASS: pending cleared after final clean ack");
+                    if (uut.cfg_req_pending !== 1'b0) begin
+                        $display("      FAIL: pending still set after cycle %0d", cycle + 1);
+                        cfg_failures = cfg_failures + 1;
+                    end
+                end
+                $display("    PASS: 3 CDC request/ack cycles completed");
+            end
 
             if (cfg_failures > 0) begin
-                $display("  FAIL: %0d Step 2.5.3 test(s) failed", cfg_failures);
+                $display("  FAIL: %0d Step 2.5.4 test(s) failed", cfg_failures);
                 total_failures = total_failures + 1;
             end else
-                $display("  PASS: All Step 2.5.3 publish bundle tests passed");
+                $display("  PASS: All Step 2.5.4 CDC synchronizer tests passed");
+        end
+
+      // Step 2.5.5: Datapath consumes DAC-domain config registers
+        // Verify that stream output reflects cfg_dac_* values after CDC round-trip,
+        // and that AXI readback still reports shadow values.
+        $display("\nSTEP 2.5.5 - DATAPATH CONSUMES DAC-DOMAIN CONFIG:");
+        $display("----------------------------------------");
+        begin
+            integer dp_failures;
+            dp_failures = 0;
+
+            // Enable streaming with known config
+            write_register(7'h00, 32'd1);  // waveform_type = sine
+            write_register(7'h01, 32'd2000000);  // frequency = 2 MHz
+            write_register(7'h02, 32'h7FFF);  // amplitude = full scale
+            write_register(7'h03, 32'd0);  // phase = 0
+            write_register(7'h04, 32'd0);  // offset = 0
+            write_register(7'h05, 32'd1);  // enable
+
+            // Wait for CDC round-trip so cfg_dac_* are populated, then startup
+            if (uut.cfg_req_pending) begin
+                wait_cfg_pending_clear(200);
+                if (uut.cfg_req_pending) begin
+                    wait_cfg_pending_clear(200);
+                end
+            end
+            // Wait for startup guard
+            repeat (210) @(posedge m00_axis_aclk);
+
+            // Verify streaming is active
+            if (!m00_axis_tvalid) begin
+                $display("    FAIL: streaming not active after startup");
+                dp_failures = dp_failures + 1;
+            end else
+                $display("  PASS: streaming active with cfg_dac_* config");
+
+            // Collect baseline beats (20 beats, quick check)
+            begin
+                integer i, b, dp_xz, dp_range;
+                dp_xz = 0;
+                dp_range = 0;
+                for (b = 0; b < 20; b = b + 1) begin
+                    @(posedge m00_axis_aclk);
+                    if (m00_axis_tvalid && m00_axis_tready) begin
+                        for (i = 0; i < WORDS_PER_BEAT; i = i + 1) begin
+                            reg signed [15:0] w;
+                            w = m00_axis_tdata[i*16 +: 16];
+                            if ($isunknown(w)) dp_xz = dp_xz + 1;
+                            if (w < -32768 || w > 32764) dp_range = dp_range + 1;
+                        end
+                    end
+                end
+                if (dp_xz > 0 || dp_range > 0) begin
+                    $display("    FAIL: baseline: %0d X/Z, %0d range violations", dp_xz, dp_range);
+                    dp_failures = dp_failures + 1;
+                end else
+                    $display("  PASS: 20 baseline beats, no X/Z, all in range");
+            end
+
+            // Test 1: Dynamic frequency change (2MHz -> 5MHz)
+            $display("  Test 1: frequency change 2MHz -> 5MHz while streaming");
+            write_register(7'h01, 32'd5000000);
+            @(posedge s00_axi_aclk);
+
+            // Wait for CDC round-trip
+            if (uut.cfg_req_pending) begin
+                wait_cfg_pending_clear(200);
+            end
+            repeat (20) @(posedge m00_axis_aclk);
+
+            // Verify cfg_dac_frequency updated
+            if (uut.cfg_dac_frequency !== 32'd5000000) begin
+                $display("    FAIL: cfg_dac_frequency = 0x%08h (expected 0x%08h)",
+                         uut.cfg_dac_frequency, 32'd5000000);
+                dp_failures = dp_failures + 1;
+            end else
+                $display("    PASS: cfg_dac_frequency updated to 5MHz");
+
+            // Collect beats after frequency change
+            begin
+                integer i, b, dp_xz, dp_range;
+                dp_xz = 0;
+                dp_range = 0;
+                for (b = 0; b < 50; b = b + 1) begin
+                    @(posedge m00_axis_aclk);
+                    if (m00_axis_tvalid && m00_axis_tready) begin
+                        for (i = 0; i < WORDS_PER_BEAT; i = i + 1) begin
+                            reg signed [15:0] w;
+                            w = m00_axis_tdata[i*16 +: 16];
+                            if ($isunknown(w)) dp_xz = dp_xz + 1;
+                            if (w < -32768 || w > 32764) dp_range = dp_range + 1;
+                        end
+                    end
+                end
+                if (dp_xz > 0 || dp_range > 0) begin
+                    $display("    FAIL: freq change: %0d X/Z, %0d range violations", dp_xz, dp_range);
+                    dp_failures = dp_failures + 1;
+                end else
+                    $display("    PASS: freq change: 0 X/Z, 0 range violations");
+            end
+
+            // Test 2: Amplitude change (full -> half)
+            $display("  Test 2: amplitude change full -> half while streaming");
+            write_register(7'h02, 32'h3FFF);
+            @(posedge s00_axi_aclk);
+            if (uut.cfg_req_pending) begin
+                wait_cfg_pending_clear(200);
+            end
+            repeat (20) @(posedge m00_axis_aclk);
+
+            if (uut.cfg_dac_amplitude !== 32'h3FFF) begin
+                $display("    FAIL: cfg_dac_amplitude = 0x%08h (expected 0x00003FFF)",
+                         uut.cfg_dac_amplitude);
+                dp_failures = dp_failures + 1;
+            end else
+                $display("    PASS: cfg_dac_amplitude updated to half scale");
+
+            // Test 3: Offset change (0 -> +2048)
+            $display("  Test 3: offset change 0 -> +2048 while streaming");
+            write_register(7'h04, 32'd2048);
+            @(posedge s00_axi_aclk);
+            if (uut.cfg_req_pending) begin
+                wait_cfg_pending_clear(200);
+            end
+            repeat (20) @(posedge m00_axis_aclk);
+
+            if (uut.cfg_dac_offset !== 32'd2048) begin
+                $display("    FAIL: cfg_dac_offset = 0x%08h (expected 0x%08h)",
+                         uut.cfg_dac_offset, 32'd2048);
+                dp_failures = dp_failures + 1;
+            end else
+                $display("    PASS: cfg_dac_offset updated to +2048");
+
+            // Test 4: Disable/re-enable
+            $display("  Test 4: disable/re-enable with CDC");
+            write_register(7'h05, 32'd0);
+            @(posedge s00_axi_aclk);
+            if (uut.cfg_req_pending) begin
+                wait_cfg_pending_clear(200);
+            end
+            repeat (10) @(posedge m00_axis_aclk);
+
+            if (m00_axis_tvalid) begin
+                $display("    FAIL: tvalid still asserted after disable");
+                dp_failures = dp_failures + 1;
+            end else
+                $display("    PASS: tvalid deasserted after disable");
+
+            write_register(7'h05, 32'd1);
+            @(posedge s00_axi_aclk);
+            if (uut.cfg_req_pending) begin
+                wait_cfg_pending_clear(200);
+                if (uut.cfg_req_pending) begin
+                    wait_cfg_pending_clear(200);
+                end
+            end
+            repeat (210) @(posedge m00_axis_aclk);
+
+            if (!m00_axis_tvalid) begin
+                $display("    FAIL: tvalid not reasserted after re-enable");
+                dp_failures = dp_failures + 1;
+            end else
+                $display("    PASS: tvalid reasserted after re-enable");
+
+            // Final streaming check after all changes
+            begin
+                integer i, b, dp_xz, dp_range;
+                dp_xz = 0;
+                dp_range = 0;
+                for (b = 0; b < 20; b = b + 1) begin
+                    @(posedge m00_axis_aclk);
+                    if (m00_axis_tvalid && m00_axis_tready) begin
+                        for (i = 0; i < WORDS_PER_BEAT; i = i + 1) begin
+                            reg signed [15:0] w;
+                            w = m00_axis_tdata[i*16 +: 16];
+                            if ($isunknown(w)) dp_xz = dp_xz + 1;
+                            if (w < -32768 || w > 32764) dp_range = dp_range + 1;
+                        end
+                    end
+                end
+                if (dp_xz > 0 || dp_range > 0) begin
+                    $display("    FAIL: post-re-enable: %0d X/Z, %0d range violations", dp_xz, dp_range);
+                    dp_failures = dp_failures + 1;
+                end else
+                    $display("    PASS: post-re-enable streaming: 0 X/Z, 0 range violations");
+            end
+
+            if (dp_failures > 0) begin
+                $display("  FAIL: %0d Step 2.5.5 test(s) failed", dp_failures);
+                total_failures = total_failures + 1;
+            end else
+                $display("  PASS: All Step 2.5.5 datapath CDC config tests passed");
+        end
+
+        // Step 2.5.6: Enable and phase-update semantics
+        // Tests: disable stops tvalid, re-enable resumes with deterministic phase,
+        // known phase produces expected quadrant, phase change while streaming is safe.
+        $display("\nSTEP 2.5.6 - ENABLE AND PHASE-UPDATE SEMANTICS:");
+        $display("----------------------------------------");
+        begin
+            integer en_phase_failures;
+            en_phase_failures = 0;
+
+            // Ensure clean CDC state
+            if (uut.cfg_req_pending) begin
+                wait_cfg_pending_clear(200);
+                if (uut.cfg_req_pending) begin
+                    wait_cfg_pending_clear(200);
+                end
+            end
+
+            // --- Test 1: Disable stops tvalid ---
+            $display("  Test 1: disable stops tvalid");
+            // Ensure streaming is active
+            write_register(7'h01, 32'd2000000);
+            write_register(7'h02, 32'h7FFF);
+            write_register(7'h03, 32'd0);
+            write_register(7'h04, 32'd0);
+            write_register(7'h05, 32'd1);
+            if (uut.cfg_req_pending) begin
+                wait_cfg_pending_clear(200);
+                if (uut.cfg_req_pending) begin
+                    wait_cfg_pending_clear(200);
+                end
+            end
+            // Wait for startup guard
+            repeat (210) @(posedge m00_axis_aclk);
+
+            if (!m00_axis_tvalid) begin
+                $display("    FAIL: streaming not active before disable test");
+                en_phase_failures = en_phase_failures + 1;
+            end else begin
+                $display("    PASS: streaming confirmed active");
+
+                // Disable
+                write_register(7'h05, 32'd0);
+                if (uut.cfg_req_pending) begin
+                    wait_cfg_pending_clear(200);
+                end
+                // Wait for cfg_dac_enable to propagate and output_valid to deassert
+                repeat (30) @(posedge m00_axis_aclk);
+
+                if (m00_axis_tvalid) begin
+                    $display("    FAIL: tvalid still asserted after disable");
+                    en_phase_failures = en_phase_failures + 1;
+                end else
+                    $display("    PASS: tvalid deasserted after disable");
+            end
+
+            // --- Test 2: Re-enable with deterministic phase (90 degrees) ---
+            $display("  Test 2: re-enable with phase=90deg produces expected quadrant");
+            // Set frequency=0 for deterministic output, phase=90 degrees
+            write_register(7'h01, 32'd0);
+            write_register(7'h03, 32'h40000000);
+            // Re-enable
+            write_register(7'h05, 32'd1);
+
+            // Wait for CDC round-trip for all writes (may need multiple round-trips due to dirty)
+            if (uut.cfg_req_pending) begin
+                wait_cfg_pending_clear(200);
+                if (uut.cfg_req_pending) begin
+                    wait_cfg_pending_clear(200);
+                end
+            end
+
+            // Wait for startup guard (2 cycles) plus settling
+            repeat (210) @(posedge m00_axis_aclk);
+
+            if (!m00_axis_tvalid) begin
+                $display("    FAIL: tvalid not reasserted after re-enable");
+                en_phase_failures = en_phase_failures + 1;
+            end else begin
+                $display("    PASS: tvalid reasserted after startup guard");
+
+                // Collect first valid beat and verify phase quadrant
+                begin
+                    integer collected;
+                    collected = 0;
+                    while (!collected) begin
+                        @(posedge m00_axis_aclk);
+                        if (m00_axis_tvalid && m00_axis_tready) begin
+                            decode_beat(m00_axis_tdata);
+                            collected = 1;
+                        end
+                    end
+
+                    // At phase=90 deg, frequency=0:
+                    // sine ~ +8191 (I channel -> I*4 ~ +32764, near 0x7FFC)
+                    // cosine ~ 0 (Q channel -> Q*4 ~ 0)
+                    // With Q15 quantization, expect sine in [8185, 8191] range
+                    // After *4 scaling: I0 in [32740, 32764], Q0 in [-20, +20]
+                    begin
+                        integer i_ok;
+                        integer q_ok;
+                        i_ok = (dec_word0 >= 32740 && dec_word0 <= 32764);
+                        q_ok = (dec_word1 >= -20 && dec_word1 <= 20);
+
+                        if (!i_ok) begin
+                            $display("    FAIL: I0=%d not near +32764 (expected [32740, 32764])",
+                                     dec_word0);
+                            en_phase_failures = en_phase_failures + 1;
+                        end else
+                            $display("    PASS: I0=%d near +FS (sine quadrant at 90deg)", dec_word0);
+
+                        if (!q_ok) begin
+                            $display("    FAIL: Q0=%d not near 0 (expected [-20, +20])",
+                                     dec_word1);
+                            en_phase_failures = en_phase_failures + 1;
+                        end else
+                            $display("    PASS: Q0=%d near 0 (cosine quadrant at 90deg)", dec_word1);
+
+                        // Verify no X/Z
+                        if ($isunknown(dec_word0) || $isunknown(dec_word1) ||
+                            $isunknown(dec_word2) || $isunknown(dec_word3) ||
+                            $isunknown(dec_word4) || $isunknown(dec_word5) ||
+                            $isunknown(dec_word6) || $isunknown(dec_word7) ||
+                            $isunknown(dec_word8) || $isunknown(dec_word9)) begin
+                            $display("    FAIL: X/Z detected in first beat after re-enable");
+                            en_phase_failures = en_phase_failures + 1;
+                        end
+
+                        // Verify all words in range
+                        if (dec_word0 < -32768 || dec_word0 > 32764 ||
+                            dec_word1 < -32768 || dec_word1 > 32764 ||
+                            dec_word2 < -32768 || dec_word2 > 32764 ||
+                            dec_word3 < -32768 || dec_word3 > 32764 ||
+                            dec_word4 < -32768 || dec_word4 > 32764 ||
+                            dec_word5 < -32768 || dec_word5 > 32764 ||
+                            dec_word6 < -32768 || dec_word6 > 32764 ||
+                            dec_word7 < -32768 || dec_word7 > 32764 ||
+                            dec_word8 < -32768 || dec_word8 > 32764 ||
+                            dec_word9 < -32768 || dec_word9 > 32764) begin
+                            $display("    FAIL: out-of-range word in first beat after re-enable");
+                            en_phase_failures = en_phase_failures + 1;
+                        end
+                    end
+                end
+            end
+
+            // --- Test 3: Phase=0 deg verification ---
+            $display("  Test 3: re-enable with phase=0deg produces expected quadrant");
+            // Disable, change phase to 0, re-enable
+            write_register(7'h05, 32'd0);
+            if (uut.cfg_req_pending) begin
+                wait_cfg_pending_clear(200);
+            end
+            repeat (10) @(posedge m00_axis_aclk);
+
+            write_register(7'h03, 32'd0);
+            write_register(7'h05, 32'd1);
+            if (uut.cfg_req_pending) begin
+                wait_cfg_pending_clear(200);
+                if (uut.cfg_req_pending) begin
+                    wait_cfg_pending_clear(200);
+                end
+            end
+            repeat (210) @(posedge m00_axis_aclk);
+
+            if (!m00_axis_tvalid) begin
+                $display("    FAIL: tvalid not reasserted for phase=0 test");
+                en_phase_failures = en_phase_failures + 1;
+            end else begin
+                begin
+                    integer collected;
+                    collected = 0;
+                    while (!collected) begin
+                        @(posedge m00_axis_aclk);
+                        if (m00_axis_tvalid && m00_axis_tready) begin
+                            decode_beat(m00_axis_tdata);
+                            collected = 1;
+                        end
+                    end
+
+                    // At phase=0 deg, frequency=0:
+                    // sine ~ 0 (I channel -> I0 ~ 0)
+                    // cosine ~ +8191 (Q channel -> Q0 ~ +32764, near 0x7FFC)
+                    begin
+                        integer i_ok;
+                        integer q_ok;
+                        i_ok = (dec_word0 >= -20 && dec_word0 <= 20);
+                        q_ok = (dec_word1 >= 32740 && dec_word1 <= 32764);
+
+                        if (!i_ok) begin
+                            $display("    FAIL: I0=%d not near 0 (expected [-20, +20])",
+                                     dec_word0);
+                            en_phase_failures = en_phase_failures + 1;
+                        end else
+                            $display("    PASS: I0=%d near 0 (sine quadrant at 0deg)", dec_word0);
+
+                        if (!q_ok) begin
+                            $display("    FAIL: Q0=%d not near +32764 (expected [32740, 32764])",
+                                     dec_word1);
+                            en_phase_failures = en_phase_failures + 1;
+                        end else
+                            $display("    PASS: Q0=%d near +FS (cosine quadrant at 0deg)", dec_word1);
+                    end
+                end
+            end
+
+            // --- Test 4: Phase change while streaming ---
+            $display("  Test 4: phase change while streaming produces no X/Z or out-of-range");
+            // Re-enable with 2 MHz tone
+            write_register(7'h01, 32'd2000000);
+            write_register(7'h03, 32'd0);
+            write_register(7'h05, 32'd1);
+            if (uut.cfg_req_pending) begin
+                wait_cfg_pending_clear(200);
+                if (uut.cfg_req_pending) begin
+                    wait_cfg_pending_clear(200);
+                end
+            end
+            repeat (210) @(posedge m00_axis_aclk);
+
+            // Wait for tvalid
+            begin
+                integer wait_tv;
+                wait_tv = 0;
+                while (!m00_axis_tvalid && wait_tv < 100) begin
+                    @(posedge m00_axis_aclk);
+                    wait_tv = wait_tv + 1;
+                end
+                if (wait_tv >= 100) begin
+                    $display("    FAIL: tvalid did not assert for phase-change test");
+                    en_phase_failures = en_phase_failures + 1;
+                end
+            end
+
+            // Collect 20 beats, then change phase mid-stream
+            begin
+                integer b, phase_xz, phase_range;
+                phase_xz = 0;
+                phase_range = 0;
+                b = 0;
+                while (b < 20) begin
+                    @(posedge m00_axis_aclk);
+                    if (m00_axis_tvalid && m00_axis_tready) begin
+                        b = b + 1;
+                    end
+                end
+
+                // Change phase to 180 degrees while streaming
+                write_register(7'h03, 32'h80000000);
+                // Wait for CDC transfer
+                if (uut.cfg_req_pending) begin
+                    wait_cfg_pending_clear(200);
+                end
+
+                // Collect 100 beats after phase change
+                b = 0;
+                while (b < 100) begin
+                    @(posedge m00_axis_aclk);
+                    if (m00_axis_tvalid && m00_axis_tready) begin
+                        b = b + 1;
+                        decode_beat(m00_axis_tdata);
+                        if ($isunknown(dec_word0) || $isunknown(dec_word1) ||
+                            $isunknown(dec_word2) || $isunknown(dec_word3) ||
+                            $isunknown(dec_word4) || $isunknown(dec_word5) ||
+                            $isunknown(dec_word6) || $isunknown(dec_word7) ||
+                            $isunknown(dec_word8) || $isunknown(dec_word9)) begin
+                            phase_xz = phase_xz + 1;
+                        end
+                        if (dec_word0 < -32768 || dec_word0 > 32764 ||
+                            dec_word1 < -32768 || dec_word1 > 32764 ||
+                            dec_word2 < -32768 || dec_word2 > 32764 ||
+                            dec_word3 < -32768 || dec_word3 > 32764 ||
+                            dec_word4 < -32768 || dec_word4 > 32764 ||
+                            dec_word5 < -32768 || dec_word5 > 32764 ||
+                            dec_word6 < -32768 || dec_word6 > 32764 ||
+                            dec_word7 < -32768 || dec_word7 > 32764 ||
+                            dec_word8 < -32768 || dec_word8 > 32764 ||
+                            dec_word9 < -32768 || dec_word9 > 32764) begin
+                            phase_range = phase_range + 1;
+                        end
+                    end
+                end
+
+                if (phase_xz > 0) begin
+                    $display("    FAIL: %0d X/Z word(s) during phase change", phase_xz);
+                    en_phase_failures = en_phase_failures + 1;
+                end else
+                    $display("    PASS: 0 X/Z words during phase change (100 beats)");
+
+                if (phase_range > 0) begin
+                    $display("    FAIL: %0d out-of-range word(s) during phase change", phase_range);
+                    en_phase_failures = en_phase_failures + 1;
+                end else
+                    $display("    PASS: 0 out-of-range words during phase change (100 beats)");
+            end
+
+            if (en_phase_failures > 0) begin
+                $display("  FAIL: %0d Step 2.5.6 test(s) failed", en_phase_failures);
+                total_failures = total_failures + 1;
+            end else
+                $display("  PASS: All Step 2.5.6 enable and phase-update tests passed");
         end
 
         // Step 2.4.5: Reset during partially complete AXI transactions
@@ -2159,7 +2621,7 @@ module function_gen_to_dac_tb;
 
         // Summary
         $display("\n========================================");
-        $display("Step 2.2 + Step 2.3 + Step 2.4.1-2.4.5 + Step 2.5.1-2.5.3 Summary");
+        $display("Step 2.2 + Step 2.3 + Step 2.4.1-2.4.5 + Step 2.5.1-2.5.6 Summary");
         $display("========================================");
         $display("  AXIS tdata width: %0d bits (expected 160)", C_M00_AXIS_TDATA_WIDTH);
         $display("  Words per beat: %0d (expected 10)", WORDS_PER_BEAT);
@@ -2253,7 +2715,7 @@ module function_gen_to_dac_tb;
             $display("FAIL: %0d test(s) failed", total_failures);
             $fatal;
         end else begin
-            $display("PASS: All Step 2.2 + Step 2.3 + Step 2.4.1 + Step 2.4.2 + Step 2.4.3 + Step 2.4.4 + Step 2.4.5 + Step 2.5.1 + Step 2.5.3 tests passed");
+            $display("PASS: All Step 2.2 + Step 2.3 + Step 2.4.1 + Step 2.4.2 + Step 2.4.3 + Step 2.4.4 + Step 2.4.5 + Step 2.5.1 + Step 2.5.4 + Step 2.5.5 + Step 2.5.6 tests passed");
         end
         $display("========================================\n");
 

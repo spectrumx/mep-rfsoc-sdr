@@ -46,7 +46,7 @@ endfunction
 // Applies amplitude scaling (Q15 fixed-point, amplitude[15:0]) and signed 14-bit offset,
 // saturates to [-8192, +8191], then shifts left by 2 bits.
 // Amplitude: Q15 signed fixed-point, range [0, 0x7FFF] (0 = mute, 0x7FFF ~= 1.0 full scale).
-// Offset: signed 14-bit value from offset_shadow[13:0], range [-8192, +8191].
+// Offset: signed 14-bit value from cfg_dac_offset[13:0], range [-8192, +8191].
 // Formula: scaled = (sample * amplitude) >>> 15 + offset; result = saturate(scaled) * 4;
 function automatic signed [15:0] dac_word_from_sample(
      input signed [13:0] sample,
@@ -191,18 +191,10 @@ module function_gen_to_dac_1_0 #
     // AXI4-Lite write domain:  s00_axi_aclk (156.25 MHz typical)
     // DAC stream consume domain: m00_axis_aclk (10.240 MHz)
     //
-    // Shadow registers crossing this unsafe boundary:
-    //   - frequency_shadow:  consumed by phase_inc computation and LUT .frequency ports
-    //   - phase_shadow:      consumed by LUT .phase_offset ports
-    //   - amplitude_shadow:  consumed by dac_word_from_sample() in output packing
-    //   - offset_shadow:     consumed by dac_word_from_sample() in output packing
-    //   - enable_shadow:     consumed by startup guard and output_valid logic
-    //   - waveform_type_shadow: captured in AXI domain, not yet consumed in datapath
-    //
-    // After Step 2.5.3-2.5.4 is complete, these shadow registers will be
-    // consumed only by the AXI read-back logic. The DAC stream logic will
-    // consume separate DAC-domain config registers updated via a CDC-safe
-    // handshake mechanism.
+    // Shadow registers are written in AXI domain and read back by AXI4-Lite master.
+    // They are NOT consumed by the DAC stream datapath (Step 2.5.5).
+    // The DAC stream consumes cfg_dac_* registers, which are captured from
+    // cfg_pub_* via CDC handshake (Step 2.5.4) in the m00_axis_aclk domain.
     //
     reg [31:0] waveform_type_shadow;
     reg [31:0] frequency_shadow;
@@ -212,8 +204,7 @@ module function_gen_to_dac_1_0 #
     reg [31:0] enable_shadow;
 
     // Step 2.5.3: AXI-domain publish bundle and dirty/pending bookkeeping
-    // These registers form a stable AXI-domain bundle for CDC transfer.
-    // The DAC domain still consumes *_shadow directly until Step 2.5.5.
+    // These registers form a stable AXI-domain bundle for CDC transfer to cfg_dac_*.
     //
     // Publish registers hold one in-flight config bundle. On the first write
     // when no request is pending, the full post-write shadow state is loaded
@@ -234,10 +225,26 @@ module function_gen_to_dac_1_0 #
     reg  cfg_req_pending;
     reg  cfg_dirty;
 
-    // Temporary simulation-only acknowledgment (Step 2.5.3 only)
-    // Driven by testbench via hierarchical reference. Replaced by real
-    // CDC synchronizer in Step 2.5.4.
-    reg  cfg_tmp_ack;
+    // Step 2.5.4/2.5.5: DAC-domain config registers
+    // These are the ONLY config registers consumed by the stream datapath.
+    // Updated via CDC-safe handshake from AXI-domain publish bundle (cfg_pub_*).
+
+    reg [31:0] cfg_dac_waveform_type;
+    reg [31:0] cfg_dac_frequency;
+    reg [31:0] cfg_dac_amplitude;
+    reg [31:0] cfg_dac_phase;
+    reg [31:0] cfg_dac_offset;
+    reg [31:0] cfg_dac_enable;
+
+    // Step 2.5.4: CDC synchronizers
+    // AXI->DAC: 2-flop synchronizer for cfg_req_toggle
+    reg  cfg_req_toggle_sync1;
+    reg  cfg_req_toggle_sync2;
+
+    // DAC->AXI: 2-flop synchronizer for cfg_ack_toggle
+    reg  cfg_ack_toggle;
+    reg  cfg_ack_toggle_sync1;
+    reg  cfg_ack_toggle_sync2;
 
     // Next-shadow regs: computed combinatorially after pending declarations.
     // (Declared here, assigned in always @(*) block near AXI write logic.)
@@ -251,7 +258,7 @@ module function_gen_to_dac_1_0 #
     // Per-sample phase increment: freq * 2^PHASE_WIDTH / LOGICAL_SAMPLE_RATE
     wire [63:0] phase_inc_64;
     wire [31:0] phase_inc;
-    assign phase_inc_64 = (frequency_shadow * (64'd1 << PHASE_WIDTH)) / LOGICAL_SAMPLE_RATE;
+    assign phase_inc_64 = (cfg_dac_frequency * (64'd1 << PHASE_WIDTH)) / LOGICAL_SAMPLE_RATE;
     assign phase_inc = phase_inc_64[PHASE_WIDTH-1:0];
 
     // Phase step offsets for samples 0..4
@@ -292,15 +299,16 @@ module function_gen_to_dac_1_0 #
         .DATA_WIDTH(14),
         .LUT_ADDR_WIDTH(12),
         .SAMPLES_PER_CLOCK(COMPLEX_SAMPLES_PER_BEAT)
-    ) u_wave0 (
+   ) u_wave0 (
         .clk(m00_axis_aclk),
-        .rst_n(m00_axis_aresetn),
-        .frequency(frequency_shadow),
-        .phase_offset(phase_shadow),
-        .phase_step_offset(phase_step0),
-        .sine_out(sine0),
-        .cosine_out(cosine0),
-        .valid_out(valid0)
+          .rst_n(m00_axis_aresetn),
+          .frequency(cfg_dac_frequency),
+          .phase_offset(cfg_dac_phase),
+          .phase_step_offset(phase_step0),
+          .en(cfg_dac_enable[0]),
+         .sine_out(sine0),
+         .cosine_out(cosine0),
+         .valid_out(valid0)
     );
 
     // Sample 1: phase + 1 step
@@ -310,15 +318,16 @@ module function_gen_to_dac_1_0 #
         .DATA_WIDTH(14),
         .LUT_ADDR_WIDTH(12),
         .SAMPLES_PER_CLOCK(COMPLEX_SAMPLES_PER_BEAT)
-    ) u_wave1 (
-        .clk(m00_axis_aclk),
-        .rst_n(m00_axis_aresetn),
-        .frequency(frequency_shadow),
-        .phase_offset(phase_shadow),
-        .phase_step_offset(phase_step1),
-        .sine_out(sine1),
-        .cosine_out(cosine1),
-        .valid_out(valid1)
+   ) u_wave1 (
+      .clk(m00_axis_aclk),
+          .rst_n(m00_axis_aresetn),
+          .frequency(cfg_dac_frequency),
+          .phase_offset(cfg_dac_phase),
+          .phase_step_offset(phase_step1),
+          .en(cfg_dac_enable[0]),
+         .sine_out(sine1),
+         .cosine_out(cosine1),
+         .valid_out(valid1)
     );
 
     // Sample 2: phase + 2 steps
@@ -328,15 +337,16 @@ module function_gen_to_dac_1_0 #
         .DATA_WIDTH(14),
         .LUT_ADDR_WIDTH(12),
         .SAMPLES_PER_CLOCK(COMPLEX_SAMPLES_PER_BEAT)
-    ) u_wave2 (
-        .clk(m00_axis_aclk),
-        .rst_n(m00_axis_aresetn),
-        .frequency(frequency_shadow),
-        .phase_offset(phase_shadow),
-        .phase_step_offset(phase_step2),
-        .sine_out(sine2),
-        .cosine_out(cosine2),
-        .valid_out(valid2)
+  ) u_wave2 (
+     .clk(m00_axis_aclk),
+          .rst_n(m00_axis_aresetn),
+          .frequency(cfg_dac_frequency),
+          .phase_offset(cfg_dac_phase),
+          .phase_step_offset(phase_step2),
+          .en(cfg_dac_enable[0]),
+         .sine_out(sine2),
+         .cosine_out(cosine2),
+         .valid_out(valid2)
     );
 
     // Sample 3: phase + 3 steps
@@ -346,15 +356,16 @@ module function_gen_to_dac_1_0 #
         .DATA_WIDTH(14),
         .LUT_ADDR_WIDTH(12),
         .SAMPLES_PER_CLOCK(COMPLEX_SAMPLES_PER_BEAT)
-    ) u_wave3 (
-        .clk(m00_axis_aclk),
-        .rst_n(m00_axis_aresetn),
-        .frequency(frequency_shadow),
-        .phase_offset(phase_shadow),
-        .phase_step_offset(phase_step3),
-        .sine_out(sine3),
-        .cosine_out(cosine3),
-        .valid_out(valid3)
+) u_wave3 (
+   .clk(m00_axis_aclk),
+          .rst_n(m00_axis_aresetn),
+          .frequency(cfg_dac_frequency),
+          .phase_offset(cfg_dac_phase),
+          .phase_step_offset(phase_step3),
+          .en(cfg_dac_enable[0]),
+         .sine_out(sine3),
+         .cosine_out(cosine3),
+         .valid_out(valid3)
     );
 
     // Sample 4: phase + 4 steps
@@ -364,15 +375,16 @@ module function_gen_to_dac_1_0 #
         .DATA_WIDTH(14),
         .LUT_ADDR_WIDTH(12),
         .SAMPLES_PER_CLOCK(COMPLEX_SAMPLES_PER_BEAT)
-    ) u_wave4 (
-        .clk(m00_axis_aclk),
-        .rst_n(m00_axis_aresetn),
-        .frequency(frequency_shadow),
-        .phase_offset(phase_shadow),
-        .phase_step_offset(phase_step4),
-        .sine_out(sine4),
-        .cosine_out(cosine4),
-        .valid_out(valid4)
+) u_wave4 (
+ .clk(m00_axis_aclk),
+          .rst_n(m00_axis_aresetn),
+          .frequency(cfg_dac_frequency),
+          .phase_offset(cfg_dac_phase),
+          .phase_step_offset(phase_step4),
+          .en(cfg_dac_enable[0]),
+         .sine_out(sine4),
+         .cosine_out(cosine4),
+         .valid_out(valid4)
     );
 
     // All generators share the same phase accumulator advancement, so
@@ -392,17 +404,17 @@ module function_gen_to_dac_1_0 #
     reg [1:0] startup_count;
     wire startup_ok;
 
-    assign enable_rise = enable_shadow[0] && !enable_d1;
+    assign enable_rise = cfg_dac_enable[0] && !enable_d1;
 
     always @(posedge m00_axis_aclk or negedge m00_axis_aresetn) begin
         if (!m00_axis_aresetn) begin
             enable_d1 <= 1'b0;
             startup_count <= 2'd0;
         end else begin
-            enable_d1 <= enable_shadow[0];
+           enable_d1 <= cfg_dac_enable[0];
             if (enable_rise) begin
                 startup_count <= 2'd0;
-            end else if (enable_shadow[0] && startup_count < 2'd2) begin
+            end else if (cfg_dac_enable[0] && startup_count < 2'd2) begin
                 startup_count <= startup_count + 1'b1;
             end
         end
@@ -427,21 +439,21 @@ module function_gen_to_dac_1_0 #
             // then is saturated to [-8192,+8191] and shifted left 2 bits for
             // MSB-aligned 16-bit output.
             output_data <= {
-                dac_word_from_sample(cosine4, amplitude_shadow[15:0], offset_shadow[13:0]),   // word9  Q4
-                dac_word_from_sample(sine4,   amplitude_shadow[15:0], offset_shadow[13:0]),   // word8  I4
-                dac_word_from_sample(cosine3, amplitude_shadow[15:0], offset_shadow[13:0]),   // word7  Q3
-                dac_word_from_sample(sine3,   amplitude_shadow[15:0], offset_shadow[13:0]),   // word6  I3
-                dac_word_from_sample(cosine2, amplitude_shadow[15:0], offset_shadow[13:0]),   // word5  Q2
-                dac_word_from_sample(sine2,   amplitude_shadow[15:0], offset_shadow[13:0]),   // word4  I2
-                dac_word_from_sample(cosine1, amplitude_shadow[15:0], offset_shadow[13:0]),   // word3  Q1
-                dac_word_from_sample(sine1,   amplitude_shadow[15:0], offset_shadow[13:0]),   // word2  I1
-                dac_word_from_sample(cosine0, amplitude_shadow[15:0], offset_shadow[13:0]),   // word1  Q0
-                dac_word_from_sample(sine0,   amplitude_shadow[15:0], offset_shadow[13:0])    // word0  I0
+                dac_word_from_sample(cosine4, cfg_dac_amplitude[15:0], cfg_dac_offset[13:0]),   // word9  Q4
+                dac_word_from_sample(sine4,   cfg_dac_amplitude[15:0], cfg_dac_offset[13:0]),   // word8  I4
+                dac_word_from_sample(cosine3, cfg_dac_amplitude[15:0], cfg_dac_offset[13:0]),   // word7  Q3
+                dac_word_from_sample(sine3,   cfg_dac_amplitude[15:0], cfg_dac_offset[13:0]),   // word6  I3
+                dac_word_from_sample(cosine2, cfg_dac_amplitude[15:0], cfg_dac_offset[13:0]),   // word5  Q2
+                dac_word_from_sample(sine2,   cfg_dac_amplitude[15:0], cfg_dac_offset[13:0]),   // word4  I2
+                dac_word_from_sample(cosine1, cfg_dac_amplitude[15:0], cfg_dac_offset[13:0]),   // word3  Q1
+                dac_word_from_sample(sine1,   cfg_dac_amplitude[15:0], cfg_dac_offset[13:0]),   // word2  I1
+                dac_word_from_sample(cosine0, cfg_dac_amplitude[15:0], cfg_dac_offset[13:0]),   // word1  Q0
+                dac_word_from_sample(sine0,   cfg_dac_amplitude[15:0], cfg_dac_offset[13:0])    // word0  I0
             };
 
             // Valid control: assert when enabled, startup guard has passed,
             // and all generators are valid
-            if (!enable_shadow[0] || !startup_ok) begin
+            if (!cfg_dac_enable[0] || !startup_ok) begin
                 output_valid <= 1'b0;
             end else if (all_valid) begin
                 output_valid <= 1'b1;
@@ -451,7 +463,65 @@ module function_gen_to_dac_1_0 #
         end
     end
 
-  // AXI4-Lite interface (hardened in Step 2.4)
+  // Step 2.5.4: DAC-domain CDC synchronizer, edge detection, bundle capture, ack toggle
+    // Runs in m00_axis_aclk. Captures stable cfg_pub_* bundle on each
+    // synchronized request-toggle edge, then toggles cfg_ack_toggle back
+    // to the AXI domain.
+
+    // 2-flop synchronizer for cfg_req_toggle (AXI->DAC)
+    always @(posedge m00_axis_aclk or negedge m00_axis_aresetn) begin
+        if (!m00_axis_aresetn) begin
+            cfg_req_toggle_sync1 <= 1'b0;
+            cfg_req_toggle_sync2 <= 1'b0;
+        end else begin
+            cfg_req_toggle_sync1 <= cfg_req_toggle;
+            cfg_req_toggle_sync2 <= cfg_req_toggle_sync1;
+        end
+    end
+
+    // Edge detection: rising or falling edge on synchronized toggle
+    wire cfg_req_edge;
+    assign cfg_req_edge = cfg_req_toggle_sync1 !== cfg_req_toggle_sync2;
+
+    // DAC-domain bundle capture and ack toggle
+    always @(posedge m00_axis_aclk or negedge m00_axis_aresetn) begin
+        if (!m00_axis_aresetn) begin
+            cfg_dac_waveform_type <= 32'h0;
+            cfg_dac_frequency     <= 32'h0;
+            cfg_dac_amplitude     <= 32'h0;
+            cfg_dac_phase         <= 32'h0;
+            cfg_dac_offset        <= 32'h0;
+            cfg_dac_enable        <= 32'h0;
+            cfg_ack_toggle        <= 1'b0;
+        end else if (cfg_req_edge) begin
+            // Capture stable AXI-domain publish bundle into DAC domain
+            cfg_dac_waveform_type <= cfg_pub_waveform_type;
+            cfg_dac_frequency     <= cfg_pub_frequency;
+            cfg_dac_amplitude     <= cfg_pub_amplitude;
+            cfg_dac_phase         <= cfg_pub_phase;
+            cfg_dac_offset        <= cfg_pub_offset;
+            cfg_dac_enable        <= cfg_pub_enable;
+            // Toggle acknowledgment back to AXI domain
+            cfg_ack_toggle        <= ~cfg_ack_toggle;
+        end
+    end
+
+    // 2-flop synchronizer for cfg_ack_toggle (DAC->AXI)
+    always @(posedge s00_axi_aclk or negedge s00_axi_aresetn) begin
+        if (!s00_axi_aresetn) begin
+            cfg_ack_toggle_sync1 <= 1'b0;
+            cfg_ack_toggle_sync2 <= 1'b0;
+        end else begin
+            cfg_ack_toggle_sync1 <= cfg_ack_toggle;
+            cfg_ack_toggle_sync2 <= cfg_ack_toggle_sync1;
+        end
+    end
+
+    // Edge detection for synchronized ack toggle in AXI domain
+    wire cfg_ack_edge;
+    assign cfg_ack_edge = cfg_ack_toggle_sync1 !== cfg_ack_toggle_sync2;
+
+   // AXI4-Lite interface (hardened in Step 2.4)
     //
     // Register map (7-bit byte-addressable, little-endian):
     //   7'h00: waveform_type_shadow  - Waveform type selection
@@ -573,13 +643,13 @@ module function_gen_to_dac_1_0 #
         end
     end
 
-    // Step 2.5.3: Publish bundle and pending/dirty state machine (AXI domain)
+   // Step 2.5.3+2.5.4: Publish bundle and pending/dirty state machine (AXI domain)
     // On first write with no pending request: load full publish bundle from
     // next_* wires (post-write values), toggle cfg_req_toggle, set pending.
     // On write while pending: set dirty, leave publish unchanged.
-    // On temporary ack while pending+dirty: reload publish from shadow,
+    // On CDC ack edge while pending+dirty: reload publish from shadow,
     // toggle again, clear dirty, stay pending.
-    // On temporary ack while pending+clean: clear pending.
+    // On CDC ack edge while pending+clean: clear pending.
     always @(posedge s00_axi_aclk or negedge s00_axi_aresetn) begin
         if (!s00_axi_aresetn) begin
             cfg_pub_waveform_type <= 32'h0;
@@ -592,8 +662,8 @@ module function_gen_to_dac_1_0 #
             cfg_req_pending       <= 1'b0;
             cfg_dirty             <= 1'b0;
         end else begin
-            // Temporary ack (simulation-only, replaced by CDC in Step 2.5.4)
-            if (cfg_tmp_ack && cfg_req_pending) begin
+            // CDC acknowledgment from DAC domain (Step 2.5.4)
+            if (cfg_ack_edge && cfg_req_pending) begin
                 if (cfg_dirty) begin
                     // Coalesced: reload publish from latest shadow, toggle, stay pending
                     cfg_pub_waveform_type <= waveform_type_shadow;
