@@ -306,7 +306,7 @@ module function_gen_to_dac_tb;
 
         $display("========================================");
         $display("Function Gen to DAC Testbench");
-        $display("Step 2.2 + Step 2.3 Verification");
+        $display("Step 2.2 + Step 2.3 + Step 2.4.1 Verification");
         $display("========================================");
         $display("AXIS tdata width: %0d bits", C_M00_AXIS_TDATA_WIDTH);
         $display("Words per beat: %0d", WORDS_PER_BEAT);
@@ -326,6 +326,8 @@ module function_gen_to_dac_tb;
         $display("  Writing amplitude = 0x7FFF (full scale, Q15)");
         write_register(7'h03, 32'd0);
         $display("  Writing phase = 0");
+        write_register(7'h04, 32'd0);
+        $display("  Writing offset = 0");
         write_register(7'h05, 32'h00000001);
         $display("  Writing enable = 1");
 
@@ -333,28 +335,67 @@ module function_gen_to_dac_tb;
         $display("\nREGISTER READBACK VERIFICATION:");
         $display("----------------------------------------");
 
+        // Step 2.4.1: Register map and readback for all supported addresses
+        // Register map:
+        //   7'h00: waveform_type_ctrl
+        //   7'h01: frequency_ctrl
+        //   7'h02: amplitude_ctrl
+        //   7'h03: phase_ctrl
+        //   7'h04: offset_ctrl
+        //   7'h05: enable_ctrl
+        //   All other addresses read as 32'h0000_0000
+
         read_register(7'h00, rb_data);
         if (rb_data !== 32'h00000001) begin
-            $display("  FAIL: waveform_type = 0x%08h (expected 0x00000001)", rb_data);
-            rb_fail = 1;
+            $display("  FAIL: waveform_type (0x00) = 0x%08h (expected 0x00000001)", rb_data);
+            $fatal;
         end else
-            $display("  PASS: waveform_type = 0x%08h", rb_data);
+            $display("  PASS: waveform_type (0x00) = 0x%08h", rb_data);
 
         read_register(7'h01, rb_data);
         if (rb_data !== 32'd2000000) begin
-            $display("  FAIL: frequency = 0x%08h (expected 0x%08h)", rb_data, 32'd2000000);
-            rb_fail = 1;
+            $display("  FAIL: frequency (0x01) = 0x%08h (expected 0x%08h)", rb_data, 32'd2000000);
+            $fatal;
         end else
-            $display("  PASS: frequency = 0x%08h", rb_data);
+            $display("  PASS: frequency (0x01) = 0x%08h", rb_data);
+
+        read_register(7'h02, rb_data);
+        if (rb_data !== 32'h00007FFF) begin
+            $display("  FAIL: amplitude (0x02) = 0x%08h (expected 0x00007FFF)", rb_data);
+            $fatal;
+        end else
+            $display("  PASS: amplitude (0x02) = 0x%08h", rb_data);
+
+        read_register(7'h03, rb_data);
+        if (rb_data !== 32'd0) begin
+            $display("  FAIL: phase (0x03) = 0x%08h (expected 0x00000000)", rb_data);
+            $fatal;
+        end else
+            $display("  PASS: phase (0x03) = 0x%08h", rb_data);
+
+        read_register(7'h04, rb_data);
+        if (rb_data !== 32'd0) begin
+            $display("  FAIL: offset (0x04) = 0x%08h (expected 0x00000000)", rb_data);
+            $fatal;
+        end else
+            $display("  PASS: offset (0x04) = 0x%08h", rb_data);
 
         read_register(7'h05, rb_data);
         if (rb_data !== 32'h00000001) begin
-            $display("  FAIL: enable = 0x%08h (expected 0x00000001)", rb_data);
-            rb_fail = 1;
+            $display("  FAIL: enable (0x05) = 0x%08h (expected 0x00000001)", rb_data);
+            $fatal;
         end else
-            $display("  PASS: enable = 0x%08h", rb_data);
+            $display("  PASS: enable (0x05) = 0x%08h", rb_data);
 
-        if (rb_fail) total_failures = total_failures + 1;
+        // Invalid address read check
+        read_register(7'h0F, rb_data);
+        if (rb_data !== 32'h00000000) begin
+            $display("  FAIL: invalid address (0x0F) = 0x%08h (expected 0x00000000)", rb_data);
+            $fatal;
+        end else
+            $display("  PASS: invalid address (0x0F) reads as 0x%08h", rb_data);
+
+        $display("  PASS: All Step 2.4.1 register-map/readback tests passed");
 
         // AXIS stream monitor
         $display("\nAXIS STREAM MONITOR:");
@@ -841,7 +882,7 @@ module function_gen_to_dac_tb;
 
         // Summary
         $display("\n========================================");
-        $display("Step 2.2 + Step 2.3 Summary");
+        $display("Step 2.2 + Step 2.3 + Step 2.4.1 Summary");
         $display("========================================");
         $display("  AXIS tdata width: %0d bits (expected 160)", C_M00_AXIS_TDATA_WIDTH);
         $display("  Words per beat: %0d (expected 10)", WORDS_PER_BEAT);
@@ -935,7 +976,7 @@ module function_gen_to_dac_tb;
             $display("FAIL: %0d test(s) failed", total_failures);
             $fatal;
         end else begin
-            $display("PASS: All Step 2.2 + Step 2.3 tests passed");
+            $display("PASS: All Step 2.2 + Step 2.3 + Step 2.4.1 tests passed");
         end
         $display("========================================\n");
 

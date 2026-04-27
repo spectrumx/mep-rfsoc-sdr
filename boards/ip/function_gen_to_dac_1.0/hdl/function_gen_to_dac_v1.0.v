@@ -372,6 +372,16 @@ module function_gen_to_dac_1_0 #
     end
 
     // AXI4-Lite interface (always-ready for now; hardened in Step 2.4)
+    //
+    // Register map (7-bit byte-addressable, little-endian):
+    //   7'h00: waveform_type_ctrl  - Waveform type selection
+    //   7'h01: frequency_ctrl      - Output frequency in Hz
+    //   7'h02: amplitude_ctrl      - Amplitude (Q15 fixed-point, [15:0])
+    //   7'h03: phase_ctrl          - Phase offset (32-bit phase accumulator units)
+    //   7'h04: offset_ctrl         - DC offset (signed 14-bit, [13:0])
+    //   7'h05: enable_ctrl         - Streaming enable ([0])
+    //   All other addresses: read as 32'h0000_0000, writes are ignored
+    //
     assign s00_axi_awready = 1'b1;
     assign s00_axi_wready  = 1'b1;
     assign s00_axi_bresp   = 2'b00;
