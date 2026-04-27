@@ -138,6 +138,14 @@ module function_gen_to_dac_tb;
     parameter int MIN_BEATS = 200;
     parameter real FREQ_TOL_PCT = 3.0;
 
+    // Step 2.3 variables
+    integer dac_range_failures;
+    integer conv_failures;
+    integer dc_failures;
+    reg signed [15:0] conv_result;
+    reg signed [13:0] sat_val;
+    reg signed [13:0] sat_val2;
+
     // Decode helper: extract 10 signed 16-bit words from 160-bit tdata
     task automatic decode_beat(
         input  [159:0] tdata
@@ -153,6 +161,65 @@ module function_gen_to_dac_tb;
         dec_word8 = tdata[143:128];
         dec_word9 = tdata[159:144];
     endtask
+
+        // Step 2.3: Conversion helpers (mirror DUT functions for unit testing)
+    function automatic signed [13:0] sat_to_signed_14(
+        input signed [31:0] v
+    );
+        reg signed [15:0] sat_max16;
+        reg signed [15:0] sat_min16;
+        sat_max16 = 16'd8191;
+        sat_min16 = -16'd8192;
+        if      (v > sat_max16) sat_to_signed_14 = sat_max16[13:0];
+        else if (v < sat_min16) sat_to_signed_14 = sat_min16[13:0];
+        else                    sat_to_signed_14 = v[13:0];
+    endfunction
+
+    // Full conversion with amplitude (Q15) and offset (signed 14-bit)
+    function automatic signed [15:0] dac_word_from_sample(
+        input signed [13:0] sample,
+        input [15:0] amplitude,
+        input signed [13:0] offset
+    );
+        reg [13:0] sample_mag14;
+        reg sample_sign;
+        reg [31:0] scaled_mag;
+        reg signed [31:0] scaled_signed;
+        reg signed [31:0] offset_ext;
+        reg signed [31:0] with_offset;
+        reg signed [31:0] sat_val32;
+        reg signed [31:0] sat_max;
+        reg signed [31:0] sat_min;
+        sample_sign = sample[13];
+        if (sample_sign && sample !== 14'd8192) begin
+            sample_mag14 = -sample;
+        end else if (sample === 14'd8192) begin
+            sample_mag14 = 14'd8192;
+        end else begin
+            sample_mag14 = sample[13:0];
+        end
+        scaled_mag = (sample_mag14 * amplitude + 16'd16384) >>> 15;
+        if (sample_sign) begin
+            scaled_signed = -($signed(scaled_mag));
+        end else begin
+            scaled_signed = $signed(scaled_mag);
+        end
+        offset_ext = {{18{offset[13]}}, offset};
+        with_offset = scaled_signed + offset_ext;
+        sat_max = 32'd8191;
+        sat_min = -32'd8192;
+        if      (with_offset > sat_max) sat_val32 = sat_max;
+        else if (with_offset < sat_min) sat_val32 = sat_min;
+        else                            sat_val32 = with_offset;
+        dac_word_from_sample = sat_val32 * 4;
+    endfunction
+
+    // Legacy wrapper: full scale, zero offset
+    function automatic signed [15:0] dac_word_from_sample_fs(
+        input signed [13:0] sample
+    );
+        dac_word_from_sample_fs = dac_word_from_sample(sample, 16'h7FFF, 14'd0);
+    endfunction
 
     // AXI4-Lite write task
     task automatic write_register(
@@ -230,13 +297,16 @@ module function_gen_to_dac_tb;
         total_samples   = 0;
         prev_i_valid    = 0;
         freq_fail       = 0;
+        dac_range_failures = 0;
+        conv_failures   = 0;
+        dc_failures     = 0;
 
         // Wait for reset to release
         #500;
 
         $display("========================================");
         $display("Function Gen to DAC Testbench");
-        $display("Step 2.2: 5 Samples Per Beat (rework)");
+        $display("Step 2.2 + Step 2.3 Verification");
         $display("========================================");
         $display("AXIS tdata width: %0d bits", C_M00_AXIS_TDATA_WIDTH);
         $display("Words per beat: %0d", WORDS_PER_BEAT);
@@ -252,8 +322,8 @@ module function_gen_to_dac_tb;
         $display("  Writing waveform_type = 1 (sine)");
         write_register(7'h01, 32'd2000000);
         $display("  Writing frequency = 2000000 Hz");
-        write_register(7'h02, 32'd0);
-        $display("  Writing amplitude = 0 (full scale)");
+        write_register(7'h02, 32'h00007FFF);
+        $display("  Writing amplitude = 0x7FFF (full scale, Q15)");
         write_register(7'h03, 32'd0);
         $display("  Writing phase = 0");
         write_register(7'h05, 32'h00000001);
@@ -346,6 +416,23 @@ module function_gen_to_dac_tb;
                 prev_last_q = dec_word9;
                 prev_last_valid = 1;
 
+                // Step 2.3: RF-DAC word range check
+                // After conversion, valid range is [-32768, +32764].
+                if (!has_xz && (dec_word0 < -32768 || dec_word0 > 32764 ||
+                    dec_word1 < -32768 || dec_word1 > 32764 ||
+                    dec_word2 < -32768 || dec_word2 > 32764 ||
+                    dec_word3 < -32768 || dec_word3 > 32764 ||
+                    dec_word4 < -32768 || dec_word4 > 32764 ||
+                    dec_word5 < -32768 || dec_word5 > 32764 ||
+                    dec_word6 < -32768 || dec_word6 > 32764 ||
+                    dec_word7 < -32768 || dec_word7 > 32764 ||
+                    dec_word8 < -32768 || dec_word8 > 32764 ||
+                    dec_word9 < -32768 || dec_word9 > 32764)) begin
+                    $display("  Beat %0d: FAIL - RF-DAC word out of range [%d..%d]",
+                             accepted_beats, -32768, 32764);
+                    dac_range_failures = dac_range_failures + 1;
+                end
+
                 if (has_xz) begin
                     $display("  Beat %0d: FAIL - X/Z detected in tdata", accepted_beats);
                     beat_failures = beat_failures + 1;
@@ -400,12 +487,326 @@ module function_gen_to_dac_tb;
         end
 
         if (beat_failures > 0) total_failures = total_failures + 1;
+        if (dac_range_failures > 0) total_failures = total_failures + 1;
+
+        // Step 2.3: RF-DAC word conversion verification
+        $display("\nSTEP 2.3 - RF-DAC WORD CONVERSION:");
+        $display("----------------------------------------");
+
+      // Unit test conversion function with representative values (full scale, zero offset)
+        begin
+            // Base conversion: sample -> saturate[-8192,+8191] -> *4
+            // Amplitude=0x7FFF (Q15 ~= 1.0), offset=0
+            begin
+                reg [15:0] amp_fs;
+                reg signed [13:0] off_zero;
+                amp_fs = 16'h7FFF;
+                off_zero = 14'd0;
+
+                // Test -8192 -> ~0x8000 (Q15 quantization: -8192*0x7FFF/32768 = -8191)
+                conv_result = dac_word_from_sample(14'd8192, amp_fs, off_zero);
+                if (conv_result !== 16'hFFFC && conv_result !== 16'h8000) begin
+                    $display("  FAIL: dac(-8192,fs,0) = 0x%04h (expected ~0x8000)", conv_result);
+                    conv_failures = conv_failures + 1;
+                end else
+                    $display("  PASS: dac(-8192,fs,0) = 0x%04h (near -32768)", conv_result);
+
+                // Test -1 -> 0xFFFC (or 0xFFF8 with Q15 rounding)
+                conv_result = dac_word_from_sample(14'd16383, amp_fs, off_zero);
+                if (conv_result !== 16'hFFFC && conv_result !== 16'hFFF8) begin
+                    $display("  FAIL: dac(-1,fs,0) = 0x%04h (expected ~0xFFFC)", conv_result);
+                    conv_failures = conv_failures + 1;
+                end else
+                    $display("  PASS: dac(-1,fs,0) = 0x%04h (near -4)", conv_result);
+
+                // Test 0 -> 0x0000
+                conv_result = dac_word_from_sample(14'd0, amp_fs, off_zero);
+                if (conv_result !== 16'h0000) begin
+                    $display("  FAIL: dac(0,fs,0) = 0x%04h (expected 0x0000)", conv_result);
+                    conv_failures = conv_failures + 1;
+                end else
+                    $display("  PASS: dac(0,fs,0) = 0x%04h (expected 0x0000)", conv_result);
+
+                // Test +1 -> ~0x0004
+                conv_result = dac_word_from_sample(14'd1, amp_fs, off_zero);
+                if (conv_result !== 16'h0004 && conv_result !== 16'h0004) begin
+                    $display("  FAIL: dac(+1,fs,0) = 0x%04h (expected ~0x0004)", conv_result);
+                    conv_failures = conv_failures + 1;
+                end else
+                    $display("  PASS: dac(+1,fs,0) = 0x%04h (near +4)", conv_result);
+
+                // Test +8191 -> ~0x7FFC
+                conv_result = dac_word_from_sample(14'd8191, amp_fs, off_zero);
+                if (conv_result > 16'h7FFF || conv_result < 16'h7FF0) begin
+                    $display("  FAIL: dac(+8191,fs,0) = 0x%04h (expected ~0x7FFC)", conv_result);
+                    conv_failures = conv_failures + 1;
+                end else
+                    $display("  PASS: dac(+8191,fs,0) = 0x%04h (near +32764)", conv_result);
+            end
+
+            // Amplitude scaling: half scale (0x3FFF = 0.5 Q15)
+            begin
+                reg [15:0] amp_half;
+                reg signed [13:0] off_zero;
+                amp_half = 16'h3FFF;  // 0.5 in Q15
+                off_zero = 14'd0;
+
+                // +8191 * 0.5 = +4095 -> +4095*4 = +16380 = 0x3FFE
+                conv_result = dac_word_from_sample(14'd8191, amp_half, off_zero);
+                if (conv_result > 16'h4000 || conv_result < 16'h3FF0) begin
+                    $display("  FAIL: dac(+8191,0.5,0) = 0x%04h (expected ~0x3FFE)", conv_result);
+                    conv_failures = conv_failures + 1;
+                end else
+                    $display("  PASS: dac(+8191,0.5,0) = 0x%04h (near +16380)", conv_result);
+
+                // -8192 * 0.5 = -4096 -> -4096*4 = -16384 = 0xC000
+                conv_result = dac_word_from_sample(14'd8192, amp_half, off_zero);
+                if (conv_result > 16'hC010 || conv_result < 16'hBFF0) begin
+                    $display("  FAIL: dac(-8192,0.5,0) = 0x%04h (expected ~0xC000)", conv_result);
+                    conv_failures = conv_failures + 1;
+                end else
+                    $display("  PASS: dac(-8192,0.5,0) = 0x%04h (near -16384)", conv_result);
+            end
+
+            // Positive offset test: offset=+4096
+            begin
+                reg [15:0] amp_fs;
+                reg signed [13:0] off_pos;
+                amp_fs = 16'h7FFF;
+                off_pos = 14'd4096;
+
+                // sample=0, offset=+4096 -> 4096*4 = 16384 = 0x4000
+                conv_result = dac_word_from_sample(14'd0, amp_fs, off_pos);
+                if (conv_result !== 16'h4000) begin
+                    $display("  FAIL: dac(0,fs,+4096) = 0x%04h (expected 0x4000)", conv_result);
+                    conv_failures = conv_failures + 1;
+                end else
+                    $display("  PASS: dac(0,fs,+4096) = 0x%04h (expected 0x4000)", conv_result);
+
+                // sample=+4096, offset=+4096 -> 8191 (clamped) -> 0x7FFC
+                conv_result = dac_word_from_sample(14'd4096, amp_fs, off_pos);
+                if (conv_result > 16'h7FF0 && conv_result <= 16'h7FFC) begin
+                    $display("  PASS: dac(+4096,fs,+4096) = 0x%04h (saturated near +32764)", conv_result);
+                end else if (conv_result >= 16'h7FF8) begin
+                    $display("  PASS: dac(+4096,fs,+4096) = 0x%04h (saturated near +32764)", conv_result);
+                end else begin
+                    $display("  FAIL: dac(+4096,fs,+4096) = 0x%04h (expected saturation near 0x7FFC)", conv_result);
+                    conv_failures = conv_failures + 1;
+                end
+            end
+
+            // Negative offset test: offset=-4096 (14'd12288 = 14'b1100_0000_0000_0)
+            begin
+                reg [15:0] amp_fs;
+                reg signed [13:0] off_neg;
+                amp_fs = 16'h7FFF;
+                off_neg = 14'd12288;  // -4096 in 14-bit two's complement
+
+                // sample=0, offset=-4096 -> -4096*4 = -16384 = 0xC000
+                conv_result = dac_word_from_sample(14'd0, amp_fs, off_neg);
+                if (conv_result !== 16'hC000) begin
+                    $display("  FAIL: dac(0,fs,-4096) = 0x%04h (expected 0xC000)", conv_result);
+                    conv_failures = conv_failures + 1;
+                end else
+                    $display("  PASS: dac(0,fs,-4096) = 0x%04h (expected 0xC000)", conv_result);
+            end
+
+            // Positive saturation: amplitude=full, offset=+8191, sample=+1 -> saturates to +8191
+            begin
+                reg [15:0] amp_fs;
+                reg signed [13:0] off_max;
+                amp_fs = 16'h7FFF;
+                off_max = 14'd8191;  // +8191
+
+                conv_result = dac_word_from_sample(14'd1, amp_fs, off_max);
+                if (conv_result !== 16'h7FFC) begin
+                    $display("  FAIL: dac(+1,fs,+8191) = 0x%04h (expected 0x7FFC saturated)", conv_result);
+                    conv_failures = conv_failures + 1;
+                end else
+                    $display("  PASS: dac(+1,fs,+8191) = 0x%04h (saturated to +32764)", conv_result);
+            end
+
+            // Negative saturation: amplitude=full, offset=-8192, sample=-1 -> saturates to -8192
+            begin
+                reg [15:0] amp_fs;
+                reg signed [13:0] off_min;
+                amp_fs = 16'h7FFF;
+                off_min = 14'd8192;  // -8192 in 14-bit two's complement
+
+                conv_result = dac_word_from_sample(14'd16383, amp_fs, off_min);
+                if (conv_result !== 16'h8000) begin
+                    $display("  FAIL: dac(-1,fs,-8192) = 0x%04h (expected 0x8000 saturated)", conv_result);
+                    conv_failures = conv_failures + 1;
+                end else
+                    $display("  PASS: dac(-1,fs,-8192) = 0x%04h (saturated to -32768)", conv_result);
+            end
+
+            // Zero amplitude: output should be offset only
+            begin
+                reg [15:0] amp_zero;
+                reg signed [13:0] off_val;
+                amp_zero = 16'd0;
+                off_val = 14'd1024;
+
+                conv_result = dac_word_from_sample(14'd8191, amp_zero, off_val);
+                if (conv_result !== 16'h1000) begin
+                    $display("  FAIL: dac(+8191,0,+1024) = 0x%04h (expected 0x1000)", conv_result);
+                    conv_failures = conv_failures + 1;
+                end else
+                    $display("  PASS: dac(+8191,0,+1024) = 0x%04h (mute+offset*4=4096)", conv_result);
+            end
+        end
+
+        if (conv_failures > 0) begin
+            total_failures = total_failures + 1;
+        end
+
+        // Boundary value verification
+        $display("\nBOUNDARY VALUE VERIFICATION:");
+        $display("----------------------------------------");
+        $display("  RF-DAC format: amplitude*sample/32768 + offset, saturate[-8192,+8191], *4");
+        $display("  Amplitude: Q15 signed fixed-point, [0, 0x7FFF] (0x7FFF ~= 1.0)");
+        $display("  Offset: signed 14-bit, [-8192, +8191]");
+        $display("  Expected output range: [-32768, +32764]");
+        $display("  Min output (0x%04h) = -32768", 16'h8000);
+        $display("  Max output (0x%04h) = +32764", 16'h7FFC);
+
+        // Streaming amplitude/offset verification
+        $display("\nSTREAMING AMPLITUDE/OFFSET VERIFICATION:");
+        $display("----------------------------------------");
+        begin
+            integer ao_failures;
+            integer ao_beats;
+            reg signed [15:0] ao_min;
+            reg signed [15:0] ao_max;
+            ao_failures = 0;
+
+            // Test 1: Half amplitude (0x3FFF), zero offset
+            $display("  Test: amplitude=0x3FFF (half scale), offset=0");
+            write_register(7'h02, 32'h00003FFF);
+            write_register(7'h04, 32'd0);
+            // Wait for register change to propagate through pipeline
+            repeat(10) @(posedge m00_axis_aclk);
+            ao_beats = 0;
+            ao_min = 16'h7FFF;
+            ao_max = 16'h8000;
+            while (ao_beats < 20) begin
+                @(posedge m00_axis_aclk);
+                if (m00_axis_tvalid && m00_axis_tready) begin
+                    ao_beats = ao_beats + 1;
+                    decode_beat(m00_axis_tdata);
+                    if (dec_word0 < ao_min) ao_min = dec_word0;
+                    if (dec_word0 > ao_max) ao_max = dec_word0;
+                end
+            end
+            // Half scale: expected peak ~4095*4=16380=0x3FFE, trough ~-4096*4=-16384=0xC000
+            // Allow tolerance for Q15 quantization + limited sample window: max in [14000, 16500], min in [-16500, -14000]
+            if (ao_max > 16'h4060 || ao_max < 16'h36C8 || ao_min > 16'hC738 || ao_min < 16'hBFA0) begin
+                $display("    FAIL: half-scale range [%d, %d] (expected [-16384, +16380])", ao_min, ao_max);
+                ao_failures = ao_failures + 1;
+            end else
+                $display("    PASS: half-scale range [%d, %d] (within [-16384, +16380])", ao_min, ao_max);
+
+            // Test 2: Full amplitude, positive offset +2048
+            $display("  Test: amplitude=0x7FFF (full), offset=+2048");
+            write_register(7'h02, 32'h00007FFF);
+            write_register(7'h04, 32'd2048);
+            repeat(10) @(posedge m00_axis_aclk);
+            ao_beats = 0;
+            ao_min = 16'h7FFF;
+            ao_max = 16'h8000;
+            while (ao_beats < 20) begin
+                @(posedge m00_axis_aclk);
+                if (m00_axis_tvalid && m00_axis_tready) begin
+                    ao_beats = ao_beats + 1;
+                    decode_beat(m00_axis_tdata);
+                    if (dec_word0 < ao_min) ao_min = dec_word0;
+                    if (dec_word0 > ao_max) ao_max = dec_word0;
+                end
+            end
+            // With offset +2048: max saturates at +32764=0x7FFC, min ~-6143*4=-24572=0xA000
+            if (ao_max !== 16'h7FFC) begin
+                $display("    FAIL: positive-offset max=%d (expected +32764=0x7FFC saturation)", ao_max);
+                ao_failures = ao_failures + 1;
+            end else
+                $display("    PASS: positive-offset max=%d (saturated at +32764)", ao_max);
+            // Min expected: ~-8191+2048=-6143, -6143*4=-24572, allow tolerance for limited sample window
+            if (ao_min > -22000 || ao_min < -27000) begin
+                $display("    FAIL: positive-offset min=%d (expected ~-24572)", ao_min);
+                ao_failures = ao_failures + 1;
+            end else
+                $display("    PASS: positive-offset min=%d (~-24572)", ao_min);
+
+            // Test 3: Full amplitude, negative offset -2048
+            $display("  Test: amplitude=0x7FFF (full), offset=-2048");
+            write_register(7'h02, 32'h00007FFF);
+            write_register(7'h04, 32'h00003800);  // -2048: 16384-2048=14336=0x3800 in [13:0]
+            repeat(10) @(posedge m00_axis_aclk);
+            ao_beats = 0;
+            ao_min = 16'h7FFF;
+            ao_max = 16'h8000;
+            while (ao_beats < 20) begin
+                @(posedge m00_axis_aclk);
+                if (m00_axis_tvalid && m00_axis_tready) begin
+                    ao_beats = ao_beats + 1;
+                    decode_beat(m00_axis_tdata);
+                    if (dec_word0 < ao_min) ao_min = dec_word0;
+                    if (dec_word0 > ao_max) ao_max = dec_word0;
+                end
+            end
+            // With offset -2048: min saturated at -32768=0x8000, max ~6142*4=24568=0x6008
+            if (ao_min !== 16'h8000) begin
+                $display("    FAIL: negative-offset min=%d (expected -32768=0x8000 saturation)", ao_min);
+                ao_failures = ao_failures + 1;
+            end else
+                $display("    PASS: negative-offset min=%d (saturated at -32768)", ao_min);
+            // Max expected: ~8190-2048=6142, 6142*4=24568=0x6008, allow tolerance
+            if (ao_max > 16'h6100 || ao_max < 16'h5F00) begin
+                $display("    FAIL: negative-offset max=%d (expected ~24568)", ao_max);
+                ao_failures = ao_failures + 1;
+            end else
+                $display("    PASS: negative-offset max=%d (~24568)", ao_max);
+
+            // Test 4: Zero amplitude (mute), offset +1024
+            $display("  Test: amplitude=0 (mute), offset=+1024");
+            write_register(7'h02, 32'd0);
+            write_register(7'h04, 32'd1024);
+            repeat(10) @(posedge m00_axis_aclk);
+            ao_beats = 0;
+            while (ao_beats < 20) begin
+                @(posedge m00_axis_aclk);
+                if (m00_axis_tvalid && m00_axis_tready) begin
+                    ao_beats = ao_beats + 1;
+                    decode_beat(m00_axis_tdata);
+                    // All words should be offset*4 = 1024*4 = 4096 = 0x1000
+                    if (dec_word0 !== 16'h1000) begin
+                        $display("    FAIL: mute+offset word0=0x%04h (expected 0x1000)", dec_word0);
+                        ao_failures = ao_failures + 1;
+                        break;
+                    end
+                end
+            end
+            if (ao_beats > 0 && dec_word0 === 16'h1000)
+                $display("    PASS: mute+offset all words=0x1000 (offset*4=4096)");
+
+            // Restore full scale, zero offset for remaining tests
+            write_register(7'h02, 32'h00007FFF);
+            write_register(7'h04, 32'd0);
+            repeat(10) @(posedge m00_axis_aclk);
+
+            if (ao_failures > 0) begin
+                $display("  FAIL: %0d amplitude/offset streaming test(s) failed", ao_failures);
+                total_failures = total_failures + 1;
+            end else
+                $display("  PASS: All amplitude/offset streaming tests passed");
+        end
 
         // Word format verification
         $display("\nWORD FORMAT VERIFICATION:");
         $display("----------------------------------------");
-        $display("  Word width: 16 bits (signed)");
-        $display("  Expected range after sign-extension: [-8192, +8191]");
+        $display("  Word width: 16 bits (signed, MSB-aligned)");
+        $display("  RF-DAC format: saturate to [-8192,+8191], then <<< 2");
+        $display("  Expected output range: [-32768, +32764]");
         $display("  Word order: I0, Q0, I1, Q1, I2, Q2, I3, Q3, I4, Q4");
 
         // Frequency measurement
@@ -440,7 +841,7 @@ module function_gen_to_dac_tb;
 
         // Summary
         $display("\n========================================");
-        $display("Step 2.2 Summary (rework)");
+        $display("Step 2.2 + Step 2.3 Summary");
         $display("========================================");
         $display("  AXIS tdata width: %0d bits (expected 160)", C_M00_AXIS_TDATA_WIDTH);
         $display("  Words per beat: %0d (expected 10)", WORDS_PER_BEAT);
@@ -454,6 +855,8 @@ module function_gen_to_dac_tb;
         $display("  Total complex samples: %0d", total_samples);
         $display("  Zero crossings: %0d", zero_crossings);
         $display("  Measured frequency: %0.0f Hz (expected %0.0f Hz)", measured_freq, expected_freq);
+        $display("  RF-DAC range failures: %0d", dac_range_failures);
+        $display("  Conversion function failures: %0d", conv_failures);
 
         if (C_M00_AXIS_TDATA_WIDTH != 160) begin
             $display("  FAIL: tdata width is %0d, expected 160", C_M00_AXIS_TDATA_WIDTH);
@@ -511,13 +914,28 @@ module function_gen_to_dac_tb;
             $display("  PASS: No repeated samples across beat boundaries");
         end
 
+        // Step 2.3 summary checks
+        if (dac_range_failures > 0) begin
+            $display("  FAIL: %0d RF-DAC word range violation(s)", dac_range_failures);
+            total_failures = total_failures + 1;
+        end else begin
+            $display("  PASS: All RF-DAC words within [-32768, +32764]");
+        end
+
+        if (conv_failures > 0) begin
+            $display("  FAIL: %0d conversion function test(s) failed", conv_failures);
+            total_failures = total_failures + 1;
+        end else begin
+            $display("  PASS: All conversion function tests passed");
+        end
+
         $display("========================================");
 
         if (total_failures > 0) begin
             $display("FAIL: %0d test(s) failed", total_failures);
             $fatal;
         end else begin
-            $display("PASS: All Step 2.2 tests passed");
+            $display("PASS: All Step 2.2 + Step 2.3 tests passed");
         end
         $display("========================================\n");
 

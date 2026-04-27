@@ -28,6 +28,86 @@
 
 `timescale 1 ns / 1 ps
 
+// Saturation helper: clamp a signed value to [-8192, +8191].
+// Used when intermediate amplitude/offset math is wider than 14 bits.
+function automatic signed [13:0] sat_to_signed_14(
+    input signed [31:0] v
+);
+    reg signed [15:0] sat_max16;
+    reg signed [15:0] sat_min16;
+    sat_max16 = 16'd8191;
+    sat_min16 = -16'd8192;
+    if      (v > sat_max16) sat_to_signed_14 = sat_max16[13:0];
+    else if (v < sat_min16) sat_to_signed_14 = sat_min16[13:0];
+    else                    sat_to_signed_14 = v[13:0];
+endfunction
+
+// Convert a signed 14-bit LUT sample to a signed 16-bit MSB-aligned RF-DAC word.
+// Applies amplitude scaling (Q15 fixed-point, amplitude[15:0]) and signed 14-bit offset,
+// saturates to [-8192, +8191], then shifts left by 2 bits.
+// Amplitude: Q15 signed fixed-point, range [0, 0x7FFF] (0 = mute, 0x7FFF ~= 1.0 full scale).
+// Offset: signed 14-bit value from offset_ctrl[13:0], range [-8192, +8191].
+// Formula: scaled = (sample * amplitude) >>> 15 + offset; result = saturate(scaled) * 4;
+function automatic signed [15:0] dac_word_from_sample(
+     input signed [13:0] sample,
+     input [15:0] amplitude,
+     input signed [13:0] offset
+ );
+     reg [13:0] sample_mag14;
+     reg sample_sign;
+     reg [31:0] scaled_mag;
+     reg signed [31:0] scaled_signed;
+     reg signed [31:0] offset_ext;
+     reg signed [31:0] with_offset;
+     reg signed [31:0] sat_val32;
+     reg signed [31:0] sat_max;
+     reg signed [31:0] sat_min;
+
+     // Handle sign separately to avoid signed multiplication issues
+     sample_sign = sample[13];
+     if (sample_sign && sample !== 14'd8192) begin
+         sample_mag14 = -sample;
+     end else if (sample === 14'd8192) begin
+         sample_mag14 = 14'd8192; // |-8192| = 8192
+     end else begin
+         sample_mag14 = sample[13:0];
+     end
+
+     // Unsigned magnitude * amplitude, then / 32768 (with rounding)
+     scaled_mag = (sample_mag14 * amplitude + 16'd16384) >>> 15;
+
+     // Re-apply sign
+     if (sample_sign) begin
+         scaled_signed = -($signed(scaled_mag));
+     end else begin
+         scaled_signed = $signed(scaled_mag);
+     end
+
+     // Explicit sign-extension of offset
+     offset_ext = {{18{offset[13]}}, offset};
+
+     // Add offset
+     with_offset = scaled_signed + offset_ext;
+
+     // Saturate to [-8192, +8191]
+     sat_max = 32'd8191;
+     sat_min = -32'd8192;
+     if      (with_offset > sat_max) sat_val32 = sat_max;
+     else if (with_offset < sat_min) sat_val32 = sat_min;
+     else                            sat_val32 = with_offset;
+
+     // Shift left 2 bits for MSB-aligned 16-bit output
+     dac_word_from_sample = sat_val32 * 4;
+ endfunction
+
+// Legacy wrapper: convert without amplitude/offset (full scale, zero offset).
+// Used by testbench unit tests that mirror DUT functions.
+function automatic signed [15:0] dac_word_from_sample_legacy(
+    input signed [13:0] sample
+);
+    dac_word_from_sample_legacy = sat_to_signed_14(sample) * 4;
+endfunction
+
 module function_gen_to_dac_1_0 #
 (
     // AXI4-Lite slave bus parameters
@@ -262,19 +342,21 @@ module function_gen_to_dac_1_0 #
             output_data  <= {C_M00_AXIS_TDATA_WIDTH{1'b0}};
             output_valid <= 1'b0;
         end else begin
-            // Pack 10 signed 16-bit words from 5 complex samples
-            // Sign-extend 14-bit LUT values to 16-bit
+            // Pack 10 signed 16-bit RF-DAC words from 5 complex samples.
+            // Each 14-bit LUT sample has amplitude scaling (Q15) and offset applied,
+            // then is saturated to [-8192,+8191] and shifted left 2 bits for
+            // MSB-aligned 16-bit output.
             output_data <= {
-                {{2{cosine4[13]}}, cosine4},   // word9  Q4
-                {{2{sine4[13]}}, sine4},       // word8  I4
-                {{2{cosine3[13]}}, cosine3},   // word7  Q3
-                {{2{sine3[13]}}, sine3},       // word6  I3
-                {{2{cosine2[13]}}, cosine2},   // word5  Q2
-                {{2{sine2[13]}}, sine2},       // word4  I2
-                {{2{cosine1[13]}}, cosine1},   // word3  Q1
-                {{2{sine1[13]}}, sine1},       // word2  I1
-                {{2{cosine0[13]}}, cosine0},   // word1  Q0
-                {{2{sine0[13]}}, sine0}        // word0  I0
+                dac_word_from_sample(cosine4, amplitude_ctrl[15:0], offset_ctrl[13:0]),   // word9  Q4
+                dac_word_from_sample(sine4,   amplitude_ctrl[15:0], offset_ctrl[13:0]),   // word8  I4
+                dac_word_from_sample(cosine3, amplitude_ctrl[15:0], offset_ctrl[13:0]),   // word7  Q3
+                dac_word_from_sample(sine3,   amplitude_ctrl[15:0], offset_ctrl[13:0]),   // word6  I3
+                dac_word_from_sample(cosine2, amplitude_ctrl[15:0], offset_ctrl[13:0]),   // word5  Q2
+                dac_word_from_sample(sine2,   amplitude_ctrl[15:0], offset_ctrl[13:0]),   // word4  I2
+                dac_word_from_sample(cosine1, amplitude_ctrl[15:0], offset_ctrl[13:0]),   // word3  Q1
+                dac_word_from_sample(sine1,   amplitude_ctrl[15:0], offset_ctrl[13:0]),   // word2  I1
+                dac_word_from_sample(cosine0, amplitude_ctrl[15:0], offset_ctrl[13:0]),   // word1  Q0
+                dac_word_from_sample(sine0,   amplitude_ctrl[15:0], offset_ctrl[13:0])    // word0  I0
             };
 
             // Valid control: assert when enabled, startup guard has passed,
