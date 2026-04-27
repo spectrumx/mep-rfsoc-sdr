@@ -24,11 +24,11 @@ start_capture_rx = "mep_rfsoc_sdr.start_capture_rx:main"
 [tool.hatch.build.targets.sdist]
 only-include = ["src"]
 
-[tool.hatch.build.targets.sdist.hooks.custom]
-path = "get_bitstream.py"
-
 [tool.hatch.build.targets.sdist.hooks.vcs]
 version-file = "src/mep_rfsoc_sdr/_version.py"
+
+[tool.hatch.build.targets.sdist.hooks.custom]
+path = "get_bitstream.py"
 
 [tool.hatch.build.targets.wheel.force-include]
 "src/bitstream" = "mep_rfsoc_sdr/bitstream"

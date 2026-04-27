@@ -4,6 +4,8 @@ import shutil
 import urllib.request
 
 from hatchling.builders.hooks.plugin.interface import BuildHookInterface
+from hatchling.metadata.core import ProjectMetadata
+from hatchling.plugin.manager import PluginManager
 
 MODULE_NAME = "mep_rfsoc_sdr"
 DIST_BITSTREAM_DIR = pathlib.Path(__file__).absolute().parent / "dist" / "bitstream"
@@ -28,6 +30,10 @@ class BitstreamHook(BuildHookInterface):
             pass
 
     def initialize(self, version, build_data) -> None:
+        metadata = ProjectMetadata(
+            pathlib.Path(__file__).absolute().parent, PluginManager()
+        )
+        tagged_version_str = metadata.version.split("+")[0]
         DIST_BITSTREAM_DIR.mkdir(exist_ok=True, parents=True)
 
         src_bitstream_dir = (
@@ -39,17 +45,20 @@ class BitstreamHook(BuildHookInterface):
         if src_bitstream_file.exists():
             shutil.copy2(src_bitstream_file, DIST_BITSTREAM_DIR)
         else:
+            bit_url = f"https://github.com/spectrumx/mep-rfsoc-sdr/releases/download/v{tagged_version_str}/sdr_bitstream.bit"
             print(
-                "Required bitstream file not found locally. Attempting to download..."
+                "Required bitstream file not found locally. "
+                f"Attempting to download {bit_url}"
             )
-            bit_url = f"https://github.com/spectrumx/mep-rfsoc-sdr/releases/download/v{version}/sdr_bitstream.bit"
             download_file(bit_url, DIST_BITSTREAM_DIR / "sdr_bitstream.bit")
 
         if src_hwh_file.exists():
             shutil.copy2(src_hwh_file, DIST_BITSTREAM_DIR)
         else:
-            print("Required HWH file not found locally. Attempting to download...")
-            hwh_url = f"https://github.com/spectrumx/mep-rfsoc-sdr/releases/download/v{version}/sdr_bitstream.hwh"
+            hwh_url = f"https://github.com/spectrumx/mep-rfsoc-sdr/releases/download/v{tagged_version_str}/sdr_bitstream.hwh"
+            print(
+                f"Required HWH file not found locally. Attempting to download {hwh_url}"
+            )
             download_file(hwh_url, DIST_BITSTREAM_DIR / "sdr_bitstream.hwh")
 
         build_data["force_include"][str(DIST_BITSTREAM_DIR)] = "src/bitstream"
