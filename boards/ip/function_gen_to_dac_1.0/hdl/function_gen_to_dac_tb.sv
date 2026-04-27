@@ -146,6 +146,9 @@ module function_gen_to_dac_tb;
     reg signed [13:0] sat_val;
     reg signed [13:0] sat_val2;
 
+    // Step 2.5.1: Baseline dynamic-update test variables
+    integer dynamic_failures;
+
     // Decode helper: extract 10 signed 16-bit words from 160-bit tdata
     task automatic decode_beat(
         input  [159:0] tdata
@@ -491,13 +494,14 @@ module function_gen_to_dac_tb;
         dac_range_failures = 0;
         conv_failures   = 0;
         dc_failures     = 0;
+        dynamic_failures = 0;
 
         // Wait for reset to release
         #500;
 
         $display("========================================");
         $display("Function Gen to DAC Testbench");
-        $display("Step 2.2 + Step 2.3 + Step 2.4.1-2.4.5 Verification");
+        $display("Step 2.2 + Step 2.3 + Step 2.4.1-2.4.5 + Step 2.5.1 Verification");
         $display("========================================");
         $display("AXIS tdata width: %0d bits", C_M00_AXIS_TDATA_WIDTH);
         $display("Words per beat: %0d", WORDS_PER_BEAT);
@@ -1363,6 +1367,292 @@ module function_gen_to_dac_tb;
         end
         if (freq_fail) total_failures = total_failures + 1;
 
+        // Step 2.5.1: Baseline dynamic-update tests
+        // Characterize current behavior before CDC hardening. These tests
+        // only check coarse safety: no X/Z words, no out-of-range words,
+        // no malformed all-identical beats for nonzero frequency.
+        // Do NOT require deterministic update-boundary behavior here.
+        $display("\nSTEP 2.5.1 - BASELINE DYNAMIC UPDATE TESTS:");
+        $display("----------------------------------------");
+        begin
+            integer dyn_xz;
+            integer dyn_range;
+            integer dyn_identical;
+            integer dyn_beats;
+            reg signed [15:0] dyn_min;
+            reg signed [15:0] dyn_max;
+            dyn_xz = 0;
+            dyn_range = 0;
+            dyn_identical = 0;
+
+            // Test 1: Dynamic frequency change while streaming
+            $display("  Test 1: dynamic frequency change (2MHz -> 5MHz -> 2MHz)");
+            write_register(7'h01, 32'd5000000);
+            repeat(10) @(posedge m00_axis_aclk);
+            dyn_beats = 0;
+            dyn_min = 16'h7FFF;
+            dyn_max = 16'h8000;
+            dyn_xz = 0;
+            dyn_range = 0;
+            dyn_identical = 0;
+            while (dyn_beats < 100) begin
+                @(posedge m00_axis_aclk);
+                if (m00_axis_tvalid && m00_axis_tready) begin
+                    dyn_beats = dyn_beats + 1;
+                    decode_beat(m00_axis_tdata);
+                    if ($isunknown(dec_word0) || $isunknown(dec_word1) ||
+                        $isunknown(dec_word2) || $isunknown(dec_word3) ||
+                        $isunknown(dec_word4) || $isunknown(dec_word5) ||
+                        $isunknown(dec_word6) || $isunknown(dec_word7) ||
+                        $isunknown(dec_word8) || $isunknown(dec_word9)) begin
+                        dyn_xz = dyn_xz + 1;
+                    end
+                    if (dec_word0 < -32768 || dec_word0 > 32764 ||
+                        dec_word1 < -32768 || dec_word1 > 32764 ||
+                        dec_word2 < -32768 || dec_word2 > 32764 ||
+                        dec_word3 < -32768 || dec_word3 > 32764 ||
+                        dec_word4 < -32768 || dec_word4 > 32764 ||
+                        dec_word5 < -32768 || dec_word5 > 32764 ||
+                        dec_word6 < -32768 || dec_word6 > 32764 ||
+                        dec_word7 < -32768 || dec_word7 > 32764 ||
+                        dec_word8 < -32768 || dec_word8 > 32764 ||
+                        dec_word9 < -32768 || dec_word9 > 32764) begin
+                        dyn_range = dyn_range + 1;
+                    end
+                    if (dec_word0 == dec_word2 && dec_word1 == dec_word3 &&
+                        dec_word2 == dec_word4 && dec_word3 == dec_word5 &&
+                        dec_word4 == dec_word6 && dec_word5 == dec_word7 &&
+                        dec_word6 == dec_word8 && dec_word7 == dec_word9) begin
+                        dyn_identical = dyn_identical + 1;
+                    end
+                    if (dec_word0 < dyn_min) dyn_min = dec_word0;
+                    if (dec_word0 > dyn_max) dyn_max = dec_word0;
+                end
+            end
+            // Restore frequency
+            write_register(7'h01, 32'd2000000);
+            repeat(10) @(posedge m00_axis_aclk);
+            if (dyn_xz > 0) begin
+                $display("    FAIL: %0d X/Z word(s) during frequency change", dyn_xz);
+                dynamic_failures = dynamic_failures + 1;
+            end
+            if (dyn_range > 0) begin
+                $display("    FAIL: %0d out-of-range word(s) during frequency change", dyn_range);
+                dynamic_failures = dynamic_failures + 1;
+            end
+            if (dyn_identical >= 90) begin
+                $display("    FAIL: %0d all-identical beats during 5MHz tone (expected varying samples)", dyn_identical);
+                dynamic_failures = dynamic_failures + 1;
+            end else
+                $display("    PASS: frequency change: 0 X/Z, 0 range violations, %0d/100 varying beats", 100 - dyn_identical);
+
+            // Test 2: Dynamic amplitude change while streaming
+            $display("  Test 2: dynamic amplitude change (full -> half -> full)");
+            write_register(7'h02, 32'h00003FFF);
+            repeat(10) @(posedge m00_axis_aclk);
+            dyn_beats = 0;
+            dyn_min = 16'h7FFF;
+            dyn_max = 16'h8000;
+            dyn_xz = 0;
+            dyn_range = 0;
+            dyn_identical = 0;
+            while (dyn_beats < 100) begin
+                @(posedge m00_axis_aclk);
+                if (m00_axis_tvalid && m00_axis_tready) begin
+                    dyn_beats = dyn_beats + 1;
+                    decode_beat(m00_axis_tdata);
+                    if ($isunknown(dec_word0) || $isunknown(dec_word1) ||
+                        $isunknown(dec_word2) || $isunknown(dec_word3) ||
+                        $isunknown(dec_word4) || $isunknown(dec_word5) ||
+                        $isunknown(dec_word6) || $isunknown(dec_word7) ||
+                        $isunknown(dec_word8) || $isunknown(dec_word9)) begin
+                        dyn_xz = dyn_xz + 1;
+                    end
+                    if (dec_word0 < -32768 || dec_word0 > 32764 ||
+                        dec_word1 < -32768 || dec_word1 > 32764 ||
+                        dec_word2 < -32768 || dec_word2 > 32764 ||
+                        dec_word3 < -32768 || dec_word3 > 32764 ||
+                        dec_word4 < -32768 || dec_word4 > 32764 ||
+                        dec_word5 < -32768 || dec_word5 > 32764 ||
+                        dec_word6 < -32768 || dec_word6 > 32764 ||
+                        dec_word7 < -32768 || dec_word7 > 32764 ||
+                        dec_word8 < -32768 || dec_word8 > 32764 ||
+                        dec_word9 < -32768 || dec_word9 > 32764) begin
+                        dyn_range = dyn_range + 1;
+                    end
+                    if (dec_word0 == dec_word2 && dec_word1 == dec_word3 &&
+                        dec_word2 == dec_word4 && dec_word3 == dec_word5 &&
+                        dec_word4 == dec_word6 && dec_word5 == dec_word7 &&
+                        dec_word6 == dec_word8 && dec_word7 == dec_word9) begin
+                        dyn_identical = dyn_identical + 1;
+                    end
+                    if (dec_word0 < dyn_min) dyn_min = dec_word0;
+                    if (dec_word0 > dyn_max) dyn_max = dec_word0;
+                end
+            end
+            // Restore amplitude
+            write_register(7'h02, 32'h00007FFF);
+            repeat(10) @(posedge m00_axis_aclk);
+            if (dyn_xz > 0) begin
+                $display("    FAIL: %0d X/Z word(s) during amplitude change", dyn_xz);
+                dynamic_failures = dynamic_failures + 1;
+            end
+            if (dyn_range > 0) begin
+                $display("    FAIL: %0d out-of-range word(s) during amplitude change", dyn_range);
+                dynamic_failures = dynamic_failures + 1;
+            end
+            if (dyn_min == dyn_max) begin
+                $display("    FAIL: half-scale amplitude produced constant output (range [%d, %d])", dyn_min, dyn_max);
+                dynamic_failures = dynamic_failures + 1;
+            end else
+                $display("    PASS: amplitude change: 0 X/Z, 0 range violations, range [%d, %d]", dyn_min, dyn_max);
+
+            // Test 3: Dynamic offset change while streaming
+            $display("  Test 3: dynamic offset change (0 -> +4096 -> 0)");
+            write_register(7'h04, 32'd4096);
+            repeat(10) @(posedge m00_axis_aclk);
+            dyn_beats = 0;
+            dyn_min = 16'h7FFF;
+            dyn_max = 16'h8000;
+            dyn_xz = 0;
+            dyn_range = 0;
+            dyn_identical = 0;
+            while (dyn_beats < 100) begin
+                @(posedge m00_axis_aclk);
+                if (m00_axis_tvalid && m00_axis_tready) begin
+                    dyn_beats = dyn_beats + 1;
+                    decode_beat(m00_axis_tdata);
+                    if ($isunknown(dec_word0) || $isunknown(dec_word1) ||
+                        $isunknown(dec_word2) || $isunknown(dec_word3) ||
+                        $isunknown(dec_word4) || $isunknown(dec_word5) ||
+                        $isunknown(dec_word6) || $isunknown(dec_word7) ||
+                        $isunknown(dec_word8) || $isunknown(dec_word9)) begin
+                        dyn_xz = dyn_xz + 1;
+                    end
+                    if (dec_word0 < -32768 || dec_word0 > 32764 ||
+                        dec_word1 < -32768 || dec_word1 > 32764 ||
+                        dec_word2 < -32768 || dec_word2 > 32764 ||
+                        dec_word3 < -32768 || dec_word3 > 32764 ||
+                        dec_word4 < -32768 || dec_word4 > 32764 ||
+                        dec_word5 < -32768 || dec_word5 > 32764 ||
+                        dec_word6 < -32768 || dec_word6 > 32764 ||
+                        dec_word7 < -32768 || dec_word7 > 32764 ||
+                        dec_word8 < -32768 || dec_word8 > 32764 ||
+                        dec_word9 < -32768 || dec_word9 > 32764) begin
+                        dyn_range = dyn_range + 1;
+                    end
+                    if (dec_word0 == dec_word2 && dec_word1 == dec_word3 &&
+                        dec_word2 == dec_word4 && dec_word3 == dec_word5 &&
+                        dec_word4 == dec_word6 && dec_word5 == dec_word7 &&
+                        dec_word6 == dec_word8 && dec_word7 == dec_word9) begin
+                        dyn_identical = dyn_identical + 1;
+                    end
+                    if (dec_word0 < dyn_min) dyn_min = dec_word0;
+                    if (dec_word0 > dyn_max) dyn_max = dec_word0;
+                end
+            end
+            // Restore offset
+            write_register(7'h04, 32'd0);
+            repeat(10) @(posedge m00_axis_aclk);
+            if (dyn_xz > 0) begin
+                $display("    FAIL: %0d X/Z word(s) during offset change", dyn_xz);
+                dynamic_failures = dynamic_failures + 1;
+            end
+            if (dyn_range > 0) begin
+                $display("    FAIL: %0d out-of-range word(s) during offset change", dyn_range);
+                dynamic_failures = dynamic_failures + 1;
+            end
+            // With +4096 offset at full scale, expect positive shift in range
+            // Max should saturate at +32764, min should be above -32768
+            if (dyn_min == dyn_max) begin
+                $display("    FAIL: offset change produced constant output (range [%d, %d])", dyn_min, dyn_max);
+                dynamic_failures = dynamic_failures + 1;
+            end else
+                $display("    PASS: offset change: 0 X/Z, 0 range violations, range [%d, %d]", dyn_min, dyn_max);
+
+            // Test 4: Dynamic enable/disable while streaming
+            $display("  Test 4: dynamic enable/disable");
+            // Disable
+            write_register(7'h05, 32'd0);
+            begin
+                integer disable_cycles;
+                disable_cycles = 0;
+                while (m00_axis_tvalid && disable_cycles < 100) begin
+                    @(posedge m00_axis_aclk);
+                    disable_cycles = disable_cycles + 1;
+                end
+                if (disable_cycles >= 100) begin
+                    $display("    FAIL: tvalid did not deassert within 100 cycles after disable");
+                    dynamic_failures = dynamic_failures + 1;
+                end else
+                    $display("    PASS: tvalid deasserted after %0d cycles", disable_cycles);
+            end
+
+            // Re-enable
+            write_register(7'h05, 32'd1);
+            begin
+                integer reenable_cycles;
+                reenable_cycles = 0;
+                while (!m00_axis_tvalid && reenable_cycles < 20) begin
+                    @(posedge m00_axis_aclk);
+                    reenable_cycles = reenable_cycles + 1;
+                end
+                if (reenable_cycles >= 20) begin
+                    $display("    FAIL: tvalid did not reassert within 20 cycles after re-enable");
+                    dynamic_failures = dynamic_failures + 1;
+                end else
+                    $display("    PASS: tvalid reasserted after %0d cycles", reenable_cycles);
+            end
+
+            // Verify streaming safety after re-enable: collect 20 beats
+            dyn_beats = 0;
+            dyn_xz = 0;
+            dyn_range = 0;
+            repeat(30) @(posedge m00_axis_aclk);
+            while (dyn_beats < 20) begin
+                @(posedge m00_axis_aclk);
+                if (m00_axis_tvalid && m00_axis_tready) begin
+                    dyn_beats = dyn_beats + 1;
+                    decode_beat(m00_axis_tdata);
+                    if ($isunknown(dec_word0) || $isunknown(dec_word1) ||
+                        $isunknown(dec_word2) || $isunknown(dec_word3) ||
+                        $isunknown(dec_word4) || $isunknown(dec_word5) ||
+                        $isunknown(dec_word6) || $isunknown(dec_word7) ||
+                        $isunknown(dec_word8) || $isunknown(dec_word9)) begin
+                        dyn_xz = dyn_xz + 1;
+                    end
+                    if (dec_word0 < -32768 || dec_word0 > 32764 ||
+                        dec_word1 < -32768 || dec_word1 > 32764 ||
+                        dec_word2 < -32768 || dec_word2 > 32764 ||
+                        dec_word3 < -32768 || dec_word3 > 32764 ||
+                        dec_word4 < -32768 || dec_word4 > 32764 ||
+                        dec_word5 < -32768 || dec_word5 > 32764 ||
+                        dec_word6 < -32768 || dec_word6 > 32764 ||
+                        dec_word7 < -32768 || dec_word7 > 32764 ||
+                        dec_word8 < -32768 || dec_word8 > 32764 ||
+                        dec_word9 < -32768 || dec_word9 > 32764) begin
+                        dyn_range = dyn_range + 1;
+                    end
+                end
+            end
+            if (dyn_xz > 0) begin
+                $display("    FAIL: %0d X/Z word(s) after re-enable", dyn_xz);
+                dynamic_failures = dynamic_failures + 1;
+            end
+            if (dyn_range > 0) begin
+                $display("    FAIL: %0d out-of-range word(s) after re-enable", dyn_range);
+                dynamic_failures = dynamic_failures + 1;
+            end
+            if (dyn_xz == 0 && dyn_range == 0)
+                $display("    PASS: post-re-enable streaming: 0 X/Z, 0 range violations over %0d beats", dyn_beats);
+
+            if (dynamic_failures > 0) begin
+                $display("  FAIL: %0d dynamic update test(s) failed", dynamic_failures);
+                total_failures = total_failures + 1;
+            end else
+                $display("  PASS: All Step 2.5.1 baseline dynamic-update tests passed");
+        end
+
         // Step 2.4.5: Reset during partially complete AXI transactions
         $display("\nSTEP 2.4.5 - RESET DURING TRANSACTIONS:");
         $display("----------------------------------------");
@@ -1597,7 +1887,7 @@ module function_gen_to_dac_tb;
 
         // Summary
         $display("\n========================================");
-        $display("Step 2.2 + Step 2.3 + Step 2.4.1-2.4.5 Summary");
+        $display("Step 2.2 + Step 2.3 + Step 2.4.1-2.4.5 + Step 2.5.1 Summary");
         $display("========================================");
         $display("  AXIS tdata width: %0d bits (expected 160)", C_M00_AXIS_TDATA_WIDTH);
         $display("  Words per beat: %0d (expected 10)", WORDS_PER_BEAT);
@@ -1691,7 +1981,7 @@ module function_gen_to_dac_tb;
             $display("FAIL: %0d test(s) failed", total_failures);
             $fatal;
         end else begin
-            $display("PASS: All Step 2.2 + Step 2.3 + Step 2.4.1 + Step 2.4.2 + Step 2.4.3 + Step 2.4.4 + Step 2.4.5 tests passed");
+            $display("PASS: All Step 2.2 + Step 2.3 + Step 2.4.1 + Step 2.4.2 + Step 2.4.3 + Step 2.4.4 + Step 2.4.5 + Step 2.5.1 tests passed");
         end
         $display("========================================\n");
 

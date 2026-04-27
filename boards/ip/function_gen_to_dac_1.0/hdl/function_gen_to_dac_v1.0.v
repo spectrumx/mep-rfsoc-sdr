@@ -46,7 +46,7 @@ endfunction
 // Applies amplitude scaling (Q15 fixed-point, amplitude[15:0]) and signed 14-bit offset,
 // saturates to [-8192, +8191], then shifts left by 2 bits.
 // Amplitude: Q15 signed fixed-point, range [0, 0x7FFF] (0 = mute, 0x7FFF ~= 1.0 full scale).
-// Offset: signed 14-bit value from offset_ctrl[13:0], range [-8192, +8191].
+// Offset: signed 14-bit value from offset_shadow[13:0], range [-8192, +8191].
 // Formula: scaled = (sample * amplitude) >>> 15 + offset; result = saturate(scaled) * 4;
 function automatic signed [15:0] dac_word_from_sample(
      input signed [13:0] sample,
@@ -176,18 +176,45 @@ module function_gen_to_dac_1_0 #
     // Phase accumulator width (must match lut_waveform_gen)
     localparam integer PHASE_WIDTH             = 32;
 
-    // Function generator control registers
-    reg [31:0] waveform_type_ctrl;
-    reg [31:0] frequency_ctrl;
-    reg [31:0] amplitude_ctrl;
-    reg [31:0] phase_ctrl;
-    reg [31:0] offset_ctrl;
-    reg [31:0] enable_ctrl;
+  // Function generator control registers (AXI-domain shadow registers)
+    //
+    // CDC BOUNDARY WARNING (Step 2.5):
+    // The following multi-bit shadow registers are written in the AXI4-Lite
+    // clock domain (s00_axi_aclk) by the AXI write logic below, but are
+    // consumed directly in the DAC stream clock domain (m00_axis_aclk) by
+    // the LUT generators, output packing, and startup guard logic. This
+    // creates an unsafe cross-clock-domain (CDC) path: multi-bit values
+    // read across clock domains without synchronization can metastabilize
+    // or present torn values (where some bits reflect the old value and
+    // other bits reflect the new value).
+    //
+    // AXI4-Lite write domain:  s00_axi_aclk (156.25 MHz typical)
+    // DAC stream consume domain: m00_axis_aclk (10.240 MHz)
+    //
+    // Shadow registers crossing this unsafe boundary:
+    //   - frequency_shadow:  consumed by phase_inc computation and LUT .frequency ports
+    //   - phase_shadow:      consumed by LUT .phase_offset ports
+    //   - amplitude_shadow:  consumed by dac_word_from_sample() in output packing
+    //   - offset_shadow:     consumed by dac_word_from_sample() in output packing
+    //   - enable_shadow:     consumed by startup guard and output_valid logic
+    //   - waveform_type_shadow: captured in AXI domain, not yet consumed in datapath
+    //
+    // After Step 2.5.3-2.5.4 is complete, these shadow registers will be
+    // consumed only by the AXI read-back logic. The DAC stream logic will
+    // consume separate DAC-domain config registers updated via a CDC-safe
+    // handshake mechanism.
+    //
+    reg [31:0] waveform_type_shadow;
+    reg [31:0] frequency_shadow;
+    reg [31:0] amplitude_shadow;
+    reg [31:0] phase_shadow;
+    reg [31:0] offset_shadow;
+    reg [31:0] enable_shadow;
 
     // Per-sample phase increment: freq * 2^PHASE_WIDTH / LOGICAL_SAMPLE_RATE
     wire [63:0] phase_inc_64;
     wire [31:0] phase_inc;
-    assign phase_inc_64 = (frequency_ctrl * (64'd1 << PHASE_WIDTH)) / LOGICAL_SAMPLE_RATE;
+    assign phase_inc_64 = (frequency_shadow * (64'd1 << PHASE_WIDTH)) / LOGICAL_SAMPLE_RATE;
     assign phase_inc = phase_inc_64[PHASE_WIDTH-1:0];
 
     // Phase step offsets for samples 0..4
@@ -231,8 +258,8 @@ module function_gen_to_dac_1_0 #
     ) u_wave0 (
         .clk(m00_axis_aclk),
         .rst_n(m00_axis_aresetn),
-        .frequency(frequency_ctrl),
-        .phase_offset(phase_ctrl),
+        .frequency(frequency_shadow),
+        .phase_offset(phase_shadow),
         .phase_step_offset(phase_step0),
         .sine_out(sine0),
         .cosine_out(cosine0),
@@ -249,8 +276,8 @@ module function_gen_to_dac_1_0 #
     ) u_wave1 (
         .clk(m00_axis_aclk),
         .rst_n(m00_axis_aresetn),
-        .frequency(frequency_ctrl),
-        .phase_offset(phase_ctrl),
+        .frequency(frequency_shadow),
+        .phase_offset(phase_shadow),
         .phase_step_offset(phase_step1),
         .sine_out(sine1),
         .cosine_out(cosine1),
@@ -267,8 +294,8 @@ module function_gen_to_dac_1_0 #
     ) u_wave2 (
         .clk(m00_axis_aclk),
         .rst_n(m00_axis_aresetn),
-        .frequency(frequency_ctrl),
-        .phase_offset(phase_ctrl),
+        .frequency(frequency_shadow),
+        .phase_offset(phase_shadow),
         .phase_step_offset(phase_step2),
         .sine_out(sine2),
         .cosine_out(cosine2),
@@ -285,8 +312,8 @@ module function_gen_to_dac_1_0 #
     ) u_wave3 (
         .clk(m00_axis_aclk),
         .rst_n(m00_axis_aresetn),
-        .frequency(frequency_ctrl),
-        .phase_offset(phase_ctrl),
+        .frequency(frequency_shadow),
+        .phase_offset(phase_shadow),
         .phase_step_offset(phase_step3),
         .sine_out(sine3),
         .cosine_out(cosine3),
@@ -303,8 +330,8 @@ module function_gen_to_dac_1_0 #
     ) u_wave4 (
         .clk(m00_axis_aclk),
         .rst_n(m00_axis_aresetn),
-        .frequency(frequency_ctrl),
-        .phase_offset(phase_ctrl),
+        .frequency(frequency_shadow),
+        .phase_offset(phase_shadow),
         .phase_step_offset(phase_step4),
         .sine_out(sine4),
         .cosine_out(cosine4),
@@ -328,17 +355,17 @@ module function_gen_to_dac_1_0 #
     reg [1:0] startup_count;
     wire startup_ok;
 
-    assign enable_rise = enable_ctrl[0] && !enable_d1;
+    assign enable_rise = enable_shadow[0] && !enable_d1;
 
     always @(posedge m00_axis_aclk or negedge m00_axis_aresetn) begin
         if (!m00_axis_aresetn) begin
             enable_d1 <= 1'b0;
             startup_count <= 2'd0;
         end else begin
-            enable_d1 <= enable_ctrl[0];
+            enable_d1 <= enable_shadow[0];
             if (enable_rise) begin
                 startup_count <= 2'd0;
-            end else if (enable_ctrl[0] && startup_count < 2'd2) begin
+            end else if (enable_shadow[0] && startup_count < 2'd2) begin
                 startup_count <= startup_count + 1'b1;
             end
         end
@@ -363,21 +390,21 @@ module function_gen_to_dac_1_0 #
             // then is saturated to [-8192,+8191] and shifted left 2 bits for
             // MSB-aligned 16-bit output.
             output_data <= {
-                dac_word_from_sample(cosine4, amplitude_ctrl[15:0], offset_ctrl[13:0]),   // word9  Q4
-                dac_word_from_sample(sine4,   amplitude_ctrl[15:0], offset_ctrl[13:0]),   // word8  I4
-                dac_word_from_sample(cosine3, amplitude_ctrl[15:0], offset_ctrl[13:0]),   // word7  Q3
-                dac_word_from_sample(sine3,   amplitude_ctrl[15:0], offset_ctrl[13:0]),   // word6  I3
-                dac_word_from_sample(cosine2, amplitude_ctrl[15:0], offset_ctrl[13:0]),   // word5  Q2
-                dac_word_from_sample(sine2,   amplitude_ctrl[15:0], offset_ctrl[13:0]),   // word4  I2
-                dac_word_from_sample(cosine1, amplitude_ctrl[15:0], offset_ctrl[13:0]),   // word3  Q1
-                dac_word_from_sample(sine1,   amplitude_ctrl[15:0], offset_ctrl[13:0]),   // word2  I1
-                dac_word_from_sample(cosine0, amplitude_ctrl[15:0], offset_ctrl[13:0]),   // word1  Q0
-                dac_word_from_sample(sine0,   amplitude_ctrl[15:0], offset_ctrl[13:0])    // word0  I0
+                dac_word_from_sample(cosine4, amplitude_shadow[15:0], offset_shadow[13:0]),   // word9  Q4
+                dac_word_from_sample(sine4,   amplitude_shadow[15:0], offset_shadow[13:0]),   // word8  I4
+                dac_word_from_sample(cosine3, amplitude_shadow[15:0], offset_shadow[13:0]),   // word7  Q3
+                dac_word_from_sample(sine3,   amplitude_shadow[15:0], offset_shadow[13:0]),   // word6  I3
+                dac_word_from_sample(cosine2, amplitude_shadow[15:0], offset_shadow[13:0]),   // word5  Q2
+                dac_word_from_sample(sine2,   amplitude_shadow[15:0], offset_shadow[13:0]),   // word4  I2
+                dac_word_from_sample(cosine1, amplitude_shadow[15:0], offset_shadow[13:0]),   // word3  Q1
+                dac_word_from_sample(sine1,   amplitude_shadow[15:0], offset_shadow[13:0]),   // word2  I1
+                dac_word_from_sample(cosine0, amplitude_shadow[15:0], offset_shadow[13:0]),   // word1  Q0
+                dac_word_from_sample(sine0,   amplitude_shadow[15:0], offset_shadow[13:0])    // word0  I0
             };
 
             // Valid control: assert when enabled, startup guard has passed,
             // and all generators are valid
-            if (!enable_ctrl[0] || !startup_ok) begin
+            if (!enable_shadow[0] || !startup_ok) begin
                 output_valid <= 1'b0;
             end else if (all_valid) begin
                 output_valid <= 1'b1;
@@ -387,15 +414,15 @@ module function_gen_to_dac_1_0 #
         end
     end
 
-    // AXI4-Lite interface (hardened in Step 2.4)
+  // AXI4-Lite interface (hardened in Step 2.4)
     //
     // Register map (7-bit byte-addressable, little-endian):
-    //   7'h00: waveform_type_ctrl  - Waveform type selection
-    //   7'h01: frequency_ctrl      - Output frequency in Hz
-    //   7'h02: amplitude_ctrl      - Amplitude (Q15 fixed-point, [15:0])
-    //   7'h03: phase_ctrl          - Phase offset (32-bit phase accumulator units)
-    //   7'h04: offset_ctrl         - DC offset (signed 14-bit, [13:0])
-    //   7'h05: enable_ctrl         - Streaming enable ([0])
+    //   7'h00: waveform_type_shadow  - Waveform type selection
+    //   7'h01: frequency_shadow      - Output frequency in Hz
+    //   7'h02: amplitude_shadow      - Amplitude (Q15 fixed-point, [15:0])
+    //   7'h03: phase_shadow          - Phase offset (32-bit phase accumulator units)
+    //   7'h04: offset_shadow         - DC offset (signed 14-bit, [13:0])
+    //   7'h05: enable_shadow         - Streaming enable ([0])
     //   All other addresses: read as 32'h0000_0000, writes are ignored
     //
     assign s00_axi_bresp   = 2'b00;
@@ -469,20 +496,20 @@ module function_gen_to_dac_1_0 #
     // Step 2.4.3: WSTRB-aware byte-lane merge for all writable registers
     always @(posedge s00_axi_aclk or negedge s00_axi_aresetn) begin
         if (!s00_axi_aresetn) begin
-            waveform_type_ctrl <= 32'h0;
-            frequency_ctrl     <= 32'h0;
-            amplitude_ctrl     <= 32'h0;
-            phase_ctrl         <= 32'h0;
-            offset_ctrl        <= 32'h0;
-            enable_ctrl        <= 32'h0;
+            waveform_type_shadow <= 32'h0;
+            frequency_shadow     <= 32'h0;
+            amplitude_shadow     <= 32'h0;
+            phase_shadow         <= 32'h0;
+            offset_shadow        <= 32'h0;
+            enable_shadow        <= 32'h0;
         end else if (pending_aw && pending_w) begin
             case (pending_aw_addr[6:0])
-              7'h00: waveform_type_ctrl <= apply_wstrb(waveform_type_ctrl, pending_w_data, pending_w_strb);
-              7'h01: frequency_ctrl     <= apply_wstrb(frequency_ctrl, pending_w_data, pending_w_strb);
-              7'h02: amplitude_ctrl     <= apply_wstrb(amplitude_ctrl, pending_w_data, pending_w_strb);
-              7'h03: phase_ctrl         <= apply_wstrb(phase_ctrl, pending_w_data, pending_w_strb);
-              7'h04: offset_ctrl        <= apply_wstrb(offset_ctrl, pending_w_data, pending_w_strb);
-              7'h05: enable_ctrl        <= apply_wstrb(enable_ctrl, pending_w_data, pending_w_strb);
+              7'h00: waveform_type_shadow <= apply_wstrb(waveform_type_shadow, pending_w_data, pending_w_strb);
+              7'h01: frequency_shadow     <= apply_wstrb(frequency_shadow, pending_w_data, pending_w_strb);
+              7'h02: amplitude_shadow     <= apply_wstrb(amplitude_shadow, pending_w_data, pending_w_strb);
+              7'h03: phase_shadow         <= apply_wstrb(phase_shadow, pending_w_data, pending_w_strb);
+              7'h04: offset_shadow        <= apply_wstrb(offset_shadow, pending_w_data, pending_w_strb);
+              7'h05: enable_shadow        <= apply_wstrb(enable_shadow, pending_w_data, pending_w_strb);
               default: ;
             endcase
         end
@@ -507,12 +534,12 @@ module function_gen_to_dac_1_0 #
             if (s00_axi_arvalid && s00_axi_arready) begin
                 araddr_latch <= s00_axi_araddr;
                 case (s00_axi_araddr[6:0])
-                  7'h00: s00_axi_rdata <= waveform_type_ctrl;
-                  7'h01: s00_axi_rdata <= frequency_ctrl;
-                  7'h02: s00_axi_rdata <= amplitude_ctrl;
-                  7'h03: s00_axi_rdata <= phase_ctrl;
-                  7'h04: s00_axi_rdata <= offset_ctrl;
-                  7'h05: s00_axi_rdata <= enable_ctrl;
+                  7'h00: s00_axi_rdata <= waveform_type_shadow;
+                  7'h01: s00_axi_rdata <= frequency_shadow;
+                  7'h02: s00_axi_rdata <= amplitude_shadow;
+                  7'h03: s00_axi_rdata <= phase_shadow;
+                  7'h04: s00_axi_rdata <= offset_shadow;
+                  7'h05: s00_axi_rdata <= enable_shadow;
                   default: s00_axi_rdata <= 32'h0;
                 endcase
             end
