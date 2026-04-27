@@ -393,6 +393,14 @@ module function_gen_to_dac_1_0 #
     wire all_valid;
     assign all_valid = valid0 && valid1 && valid2 && valid3 && valid4;
 
+    // Step 2.6: Waveform-type mode selection
+    //   0: zero output mode (tvalid=0)
+    //   1: sine/cosine tone mode (existing LUT datapath)
+    //   2: DC I/Q code mode (offset -> I, Q=0)
+    //   any other: zero output mode
+    wire zero_output_mode;
+    assign zero_output_mode = (cfg_dac_waveform_type !== 32'd1 && cfg_dac_waveform_type !== 32'd2);
+
     // Startup guard: suppress tvalid for first 2 cycles after enable goes high.
     // The LUT has a 2-cycle pipeline (lut_addr_reg latches current address,
     // then outputs are read from the latched address). When enable transitions
@@ -428,34 +436,63 @@ module function_gen_to_dac_1_0 #
     assign m00_axis_tvalid = output_valid;
     assign m00_axis_tdata  = output_data;
 
+    // DC I/Q mode: convert offset directly to RF-DAC word (ignoring amplitude).
+    // Signed 14-bit offset saturated to [-8192,+8191], shifted left 2 bits.
+    wire signed [15:0] dc_i_word;
+    wire signed [15:0] dc_q_word;
+    assign dc_i_word = sat_to_signed_14({{18{cfg_dac_offset[13]}}, cfg_dac_offset[13:0]}) * 4;
+    assign dc_q_word = 16'd0;
+
     // Pack and output one beat per AXIS clock cycle
     always @(posedge m00_axis_aclk or negedge m00_axis_aresetn) begin
         if (!m00_axis_aresetn) begin
             output_data  <= {C_M00_AXIS_TDATA_WIDTH{1'b0}};
             output_valid <= 1'b0;
         end else begin
-            // Pack 10 signed 16-bit RF-DAC words from 5 complex samples.
-            // Each 14-bit LUT sample has amplitude scaling (Q15) and offset applied,
-            // then is saturated to [-8192,+8191] and shifted left 2 bits for
-            // MSB-aligned 16-bit output.
-            output_data <= {
-                dac_word_from_sample(cosine4, cfg_dac_amplitude[15:0], cfg_dac_offset[13:0]),   // word9  Q4
-                dac_word_from_sample(sine4,   cfg_dac_amplitude[15:0], cfg_dac_offset[13:0]),   // word8  I4
-                dac_word_from_sample(cosine3, cfg_dac_amplitude[15:0], cfg_dac_offset[13:0]),   // word7  Q3
-                dac_word_from_sample(sine3,   cfg_dac_amplitude[15:0], cfg_dac_offset[13:0]),   // word6  I3
-                dac_word_from_sample(cosine2, cfg_dac_amplitude[15:0], cfg_dac_offset[13:0]),   // word5  Q2
-                dac_word_from_sample(sine2,   cfg_dac_amplitude[15:0], cfg_dac_offset[13:0]),   // word4  I2
-                dac_word_from_sample(cosine1, cfg_dac_amplitude[15:0], cfg_dac_offset[13:0]),   // word3  Q1
-                dac_word_from_sample(sine1,   cfg_dac_amplitude[15:0], cfg_dac_offset[13:0]),   // word2  I1
-                dac_word_from_sample(cosine0, cfg_dac_amplitude[15:0], cfg_dac_offset[13:0]),   // word1  Q0
-                dac_word_from_sample(sine0,   cfg_dac_amplitude[15:0], cfg_dac_offset[13:0])    // word0  I0
-            };
+            // Step 2.6: waveform-type multiplexing
+            // Mode 1 (sine): pack 10 signed 16-bit RF-DAC words from 5 complex LUT samples.
+            // Mode 2 (DC): pack 5 repeated DC I/Q samples from offset register.
+            // Mode 0/other (zero): tdata holds last registered value; tvalid forced low.
+            if (cfg_dac_waveform_type === 32'd1) begin
+                output_data <= {
+                    dac_word_from_sample(cosine4, cfg_dac_amplitude[15:0], cfg_dac_offset[13:0]),   // word9  Q4
+                    dac_word_from_sample(sine4,   cfg_dac_amplitude[15:0], cfg_dac_offset[13:0]),   // word8  I4
+                    dac_word_from_sample(cosine3, cfg_dac_amplitude[15:0], cfg_dac_offset[13:0]),   // word7  Q3
+                    dac_word_from_sample(sine3,   cfg_dac_amplitude[15:0], cfg_dac_offset[13:0]),   // word6  I3
+                    dac_word_from_sample(cosine2, cfg_dac_amplitude[15:0], cfg_dac_offset[13:0]),   // word5  Q2
+                    dac_word_from_sample(sine2,   cfg_dac_amplitude[15:0], cfg_dac_offset[13:0]),   // word4  I2
+                    dac_word_from_sample(cosine1, cfg_dac_amplitude[15:0], cfg_dac_offset[13:0]),   // word3  Q1
+                    dac_word_from_sample(sine1,   cfg_dac_amplitude[15:0], cfg_dac_offset[13:0]),   // word2  I1
+                    dac_word_from_sample(cosine0, cfg_dac_amplitude[15:0], cfg_dac_offset[13:0]),   // word1  Q0
+                    dac_word_from_sample(sine0,   cfg_dac_amplitude[15:0], cfg_dac_offset[13:0])    // word0  I0
+                };
+            end else if (cfg_dac_waveform_type === 32'd2) begin
+                output_data <= {
+                    dc_q_word, dc_i_word,
+                    dc_q_word, dc_i_word,
+                    dc_q_word, dc_i_word,
+                    dc_q_word, dc_i_word,
+                    dc_q_word, dc_i_word
+                };
+            end
 
-            // Valid control: assert when enabled, startup guard has passed,
-            // and all generators are valid
-            if (!cfg_dac_enable[0] || !startup_ok) begin
+            // Valid control per waveform type:
+            //   zero_output_mode (type 0 or anything other than 1/2): always deasserted
+            //   sine mode (type 1): asserted when enabled, startup guard passed, all generators valid
+            //   DC mode (type 2): asserted when enabled (no LUT startup guard needed)
+            if (zero_output_mode) begin
                 output_valid <= 1'b0;
-            end else if (all_valid) begin
+            end else if (!cfg_dac_enable[0]) begin
+                output_valid <= 1'b0;
+            end else if (cfg_dac_waveform_type === 32'd1) begin
+                if (!startup_ok) begin
+                    output_valid <= 1'b0;
+                end else if (all_valid) begin
+                    output_valid <= 1'b1;
+                end else begin
+                    output_valid <= 1'b0;
+                end
+            end else if (cfg_dac_waveform_type === 32'd2) begin
                 output_valid <= 1'b1;
             end else begin
                 output_valid <= 1'b0;
