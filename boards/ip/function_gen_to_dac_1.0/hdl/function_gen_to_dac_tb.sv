@@ -1,5 +1,7 @@
 // function_gen_to_dac_tb.sv
-// Step 2.2 + 2.3 + 2.4.1-2.4.5 + 2.5.1-2.5.5 comprehensive verification
+// Step 2.2 + 2.3 + 2.4.1-2.4.5 + 2.5.1-2.5.7 comprehensive verification
+// Hierarchical uut.cfg_* references in Step 2.5.4/2.5.5/2.5.6 are intentional
+// white-box checks required to verify CDC synchronizer and bundle-capture behavior.
 `timescale 1ns/1ps
 
 module function_gen_to_dac_tb;
@@ -515,7 +517,7 @@ module function_gen_to_dac_tb;
 
         $display("========================================");
         $display("Function Gen to DAC Testbench");
-        $display("Step 2.2 + Step 2.3 + Step 2.4.1-2.4.5 + Step 2.5.1-2.5.6 Verification");
+        $display("Step 2.2 + Step 2.3 + Step 2.4.1-2.4.5 + Step 2.5.1-2.5.7 Verification");
         $display("========================================");
         $display("AXIS tdata width: %0d bits", C_M00_AXIS_TDATA_WIDTH);
         $display("Words per beat: %0d", WORDS_PER_BEAT);
@@ -2621,7 +2623,7 @@ module function_gen_to_dac_tb;
 
         // Summary
         $display("\n========================================");
-        $display("Step 2.2 + Step 2.3 + Step 2.4.1-2.4.5 + Step 2.5.1-2.5.6 Summary");
+        $display("Step 2.2 + Step 2.3 + Step 2.4.1-2.4.5 + Step 2.5.1-2.5.7 Summary");
         $display("========================================");
         $display("  AXIS tdata width: %0d bits (expected 160)", C_M00_AXIS_TDATA_WIDTH);
         $display("  Words per beat: %0d (expected 10)", WORDS_PER_BEAT);
@@ -2715,7 +2717,7 @@ module function_gen_to_dac_tb;
             $display("FAIL: %0d test(s) failed", total_failures);
             $fatal;
         end else begin
-            $display("PASS: All Step 2.2 + Step 2.3 + Step 2.4.1 + Step 2.4.2 + Step 2.4.3 + Step 2.4.4 + Step 2.4.5 + Step 2.5.1 + Step 2.5.4 + Step 2.5.5 + Step 2.5.6 tests passed");
+            $display("PASS: All Step 2.2 + Step 2.3 + Step 2.4.1-2.4.5 + Step 2.5.1-2.5.7 tests passed");
         end
         $display("========================================\n");
 
