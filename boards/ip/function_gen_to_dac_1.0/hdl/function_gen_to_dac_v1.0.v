@@ -108,6 +108,22 @@ function automatic signed [15:0] dac_word_from_sample_legacy(
     dac_word_from_sample_legacy = sat_to_signed_14(sample) * 4;
 endfunction
 
+// Step 2.4.3: Byte-lane merge helper for WSTRB-aware writes.
+// Merges new_value into old_value per byte-lane strobes in wstrb.
+// WSTRB[0] -> [7:0], WSTRB[1] -> [15:8], WSTRB[2] -> [23:16], WSTRB[3] -> [31:24].
+// WSTRB=4'b0000 leaves old_value unchanged.
+function automatic [31:0] apply_wstrb;
+    input [31:0] old_value;
+    input [31:0] new_value;
+    input [3:0]  wstrb;
+    begin
+        apply_wstrb[7:0]   = wstrb[0] ? new_value[7:0]   : old_value[7:0];
+        apply_wstrb[15:8]  = wstrb[1] ? new_value[15:8]  : old_value[15:8];
+        apply_wstrb[23:16] = wstrb[2] ? new_value[23:16] : old_value[23:16];
+        apply_wstrb[31:24] = wstrb[3] ? new_value[31:24] : old_value[31:24];
+    end
+endfunction
+
 module function_gen_to_dac_1_0 #
 (
     // AXI4-Lite slave bus parameters
@@ -451,6 +467,7 @@ module function_gen_to_dac_1_0 #
     assign s00_axi_bvalid = bvalid_reg;
 
     // Register write logic: commit when both AW and W are pending
+    // Step 2.4.3: WSTRB-aware byte-lane merge for all writable registers
     always @(posedge s00_axi_aclk or negedge s00_axi_aresetn) begin
         if (!s00_axi_aresetn) begin
             waveform_type_ctrl <= 32'h0;
@@ -461,12 +478,12 @@ module function_gen_to_dac_1_0 #
             enable_ctrl        <= 32'h0;
         end else if (pending_aw && pending_w) begin
             case (pending_aw_addr[6:0])
-              7'h00: waveform_type_ctrl <= pending_w_data;
-              7'h01: frequency_ctrl     <= pending_w_data;
-              7'h02: amplitude_ctrl     <= pending_w_data;
-              7'h03: phase_ctrl         <= pending_w_data;
-              7'h04: offset_ctrl        <= pending_w_data;
-              7'h05: enable_ctrl        <= pending_w_data;
+              7'h00: waveform_type_ctrl <= apply_wstrb(waveform_type_ctrl, pending_w_data, pending_w_strb);
+              7'h01: frequency_ctrl     <= apply_wstrb(frequency_ctrl, pending_w_data, pending_w_strb);
+              7'h02: amplitude_ctrl     <= apply_wstrb(amplitude_ctrl, pending_w_data, pending_w_strb);
+              7'h03: phase_ctrl         <= apply_wstrb(phase_ctrl, pending_w_data, pending_w_strb);
+              7'h04: offset_ctrl        <= apply_wstrb(offset_ctrl, pending_w_data, pending_w_strb);
+              7'h05: enable_ctrl        <= apply_wstrb(enable_ctrl, pending_w_data, pending_w_strb);
               default: ;
             endcase
         end

@@ -358,6 +358,29 @@ module function_gen_to_dac_tb;
         s00_axi_bready = 0;
     endtask
 
+    // Step 2.4.3: WSTRB-aware write task (same-cycle AW/W with byte strobes)
+    task automatic write_register_wstrb(
+        input [6:0]  addr,
+        input [31:0] data,
+        input [3:0]  wstrb
+    );
+        @(posedge s00_axi_aclk);
+        s00_axi_awaddr = addr;
+        s00_axi_awprot = 3'h0;
+        s00_axi_awvalid = 1;
+        s00_axi_wdata   = data;
+        s00_axi_wstrb   = wstrb;
+        s00_axi_wvalid  = 1;
+        @(posedge s00_axi_aclk);
+        s00_axi_awvalid = 0;
+        s00_axi_wvalid  = 0;
+        s00_axi_wstrb   = 0;
+        while (!s00_axi_bvalid) @(posedge s00_axi_aclk);
+        s00_axi_bready = 1;
+        @(posedge s00_axi_aclk);
+        s00_axi_bready = 0;
+    endtask
+
     // AXI4-Lite read task
     task automatic read_register(
         input  [6:0]  addr,
@@ -417,7 +440,7 @@ module function_gen_to_dac_tb;
 
         $display("========================================");
         $display("Function Gen to DAC Testbench");
-        $display("Step 2.2 + Step 2.3 + Step 2.4.1 + Step 2.4.2 Verification");
+        $display("Step 2.2 + Step 2.3 + Step 2.4.1 + Step 2.4.2 + Step 2.4.3 Verification");
         $display("========================================");
         $display("AXIS tdata width: %0d bits", C_M00_AXIS_TDATA_WIDTH);
         $display("Words per beat: %0d", WORDS_PER_BEAT);
@@ -565,9 +588,117 @@ module function_gen_to_dac_tb;
             $display("  PASS: All Step 2.4.2 AW/W write acceptance tests passed");
         end
 
-        // Restore frequency for streaming tests
+        // Step 2.4.3: WSTRB byte-lane write tests
+        // CRITICAL: streaming must be disabled during WSTRB tests so that
+        // intermediate register values do not disturb the NCO/datapath state.
+        // Using phase_ctrl (0x03) as the test target to avoid changing NCO rate.
+        $display("\nSTEP 2.4.3 - WSTRB BYTE-LANE WRITES:");
+        $display("----------------------------------------");
+        begin
+            integer wstrb_failures;
+            wstrb_failures = 0;
+
+            // Disable streaming before any byte-lane tests
+            write_register(7'h05, 32'd0);
+            repeat (5) @(posedge s00_axi_aclk);
+
+            // Set known baseline on phase_ctrl with full-word write
+            write_register(7'h03, 32'h00000000);
+            read_register(7'h03, rb_data);
+            if (rb_data !== 32'h00000000) begin
+                $display("  FAIL: phase_ctrl baseline = 0x%08h (expected 0x00000000)", rb_data);
+                $fatal;
+            end
+
+            // Test 1: byte0 only (WSTRB=4'b0001)
+            $display("  Test: byte0 write (WSTRB=4'b0001) to phase_ctrl");
+            write_register_wstrb(7'h03, 32'h11223344, 4'b0001);
+            read_register(7'h03, rb_data);
+            if (rb_data !== 32'h00000044) begin
+                $display("    FAIL: byte0 readback = 0x%08h (expected 0x00000044)", rb_data);
+                wstrb_failures = wstrb_failures + 1;
+            end else
+                $display("    PASS: byte0 readback = 0x%08h", rb_data);
+
+            // Test 2: byte1 only (WSTRB=4'b0010)
+            $display("  Test: byte1 write (WSTRB=4'b0010) to phase_ctrl");
+            write_register_wstrb(7'h03, 32'hAABBCCDD, 4'b0010);
+            read_register(7'h03, rb_data);
+            if (rb_data !== 32'h0000CC44) begin
+                $display("    FAIL: byte1 readback = 0x%08h (expected 0x0000CC44)", rb_data);
+                wstrb_failures = wstrb_failures + 1;
+            end else
+                $display("    PASS: byte1 readback = 0x%08h", rb_data);
+
+            // Test 3: byte2 only (WSTRB=4'b0100)
+            // Current: 0x0000CC44, write 0x12345678, byte2=0x34 -> 0x0034CC44
+            $display("  Test: byte2 write (WSTRB=4'b0100) to phase_ctrl");
+            write_register_wstrb(7'h03, 32'h12345678, 4'b0100);
+            read_register(7'h03, rb_data);
+            if (rb_data !== 32'h0034CC44) begin
+                $display("    FAIL: byte2 readback = 0x%08h (expected 0x0034CC44)", rb_data);
+                wstrb_failures = wstrb_failures + 1;
+            end else
+                $display("    PASS: byte2 readback = 0x%08h", rb_data);
+
+            // Test 4: byte3 only (WSTRB=4'b1000)
+            // Current: 0x0034CC44, write 0xDEADBEEF, byte3=0xDE -> 0xDE34CC44
+            $display("  Test: byte3 write (WSTRB=4'b1000) to phase_ctrl");
+            write_register_wstrb(7'h03, 32'hDEADBEEF, 4'b1000);
+            read_register(7'h03, rb_data);
+            if (rb_data !== 32'hDE34CC44) begin
+                $display("    FAIL: byte3 readback = 0x%08h (expected 0xDE34CC44)", rb_data);
+                wstrb_failures = wstrb_failures + 1;
+            end else
+                $display("    PASS: byte3 readback = 0x%08h", rb_data);
+
+            // Test 5: Mixed-lane write (WSTRB=4'b1010) -- bytes 1 and 3
+            // Current: 0xDE34CC44, write 0xAA55CC11, bytes 1&3 -> 0xAA34CC44
+            $display("  Test: mixed-lane write (WSTRB=4'b1010) to phase_ctrl");
+            write_register_wstrb(7'h03, 32'hAA55CC11, 4'b1010);
+            read_register(7'h03, rb_data);
+            if (rb_data !== 32'hAA34CC44) begin
+                $display("    FAIL: mixed-lane readback = 0x%08h (expected 0xAA34CC44)", rb_data);
+                wstrb_failures = wstrb_failures + 1;
+            end else
+                $display("    PASS: mixed-lane readback = 0x%08h", rb_data);
+
+            // Test 6: No-op write (WSTRB=4'b0000) -- register unchanged
+            $display("  Test: no-op write (WSTRB=4'b0000) to phase_ctrl");
+            write_register_wstrb(7'h03, 32'hFFFFFFFF, 4'b0000);
+            read_register(7'h03, rb_data);
+            if (rb_data !== 32'hAA34CC44) begin
+                $display("    FAIL: no-op readback = 0x%08h (expected 0xAA34CC44 unchanged)", rb_data);
+                wstrb_failures = wstrb_failures + 1;
+            end else
+                $display("    PASS: no-op write leaves register unchanged = 0x%08h", rb_data);
+
+            if (wstrb_failures > 0) begin
+                $display("  FAIL: %0d WSTRB test(s) failed", wstrb_failures);
+                $fatal;
+            end else
+                $display("  PASS: All Step 2.4.3 WSTRB byte-lane tests passed");
+        end
+
+        // Restore datapath registers and restart stream for remaining tests
         write_register(7'h01, 32'd2000000);
+        write_register(7'h02, 32'h00007FFF);
         write_register(7'h03, 32'd0);
+        write_register(7'h04, 32'd0);
+        write_register(7'h05, 32'd1);
+        repeat (8) @(posedge m00_axis_aclk);
+
+        // Reset AXIS monitor state after register restoration
+        accepted_beats = 0;
+        beat_count = 0;
+        tvalid_cycles = 0;
+        tvalid_misses = 0;
+        streaming_started = 0;
+        prev_last_valid = 0;
+        zero_crossings = 0;
+        total_samples = 0;
+        prev_i_valid = 0;
+        freq_fail = 0;
 
         // AXIS stream monitor
         $display("\nAXIS STREAM MONITOR:");
@@ -1054,7 +1185,7 @@ module function_gen_to_dac_tb;
 
         // Summary
         $display("\n========================================");
-        $display("Step 2.2 + Step 2.3 + Step 2.4.1 + Step 2.4.2 Summary");
+        $display("Step 2.2 + Step 2.3 + Step 2.4.1 + Step 2.4.2 + Step 2.4.3 Summary");
         $display("========================================");
         $display("  AXIS tdata width: %0d bits (expected 160)", C_M00_AXIS_TDATA_WIDTH);
         $display("  Words per beat: %0d (expected 10)", WORDS_PER_BEAT);
@@ -1148,7 +1279,7 @@ module function_gen_to_dac_tb;
             $display("FAIL: %0d test(s) failed", total_failures);
             $fatal;
         end else begin
-            $display("PASS: All Step 2.2 + Step 2.3 + Step 2.4.1 + Step 2.4.2 tests passed");
+            $display("PASS: All Step 2.2 + Step 2.3 + Step 2.4.1 + Step 2.4.2 + Step 2.4.3 tests passed");
         end
         $display("========================================\n");
 
