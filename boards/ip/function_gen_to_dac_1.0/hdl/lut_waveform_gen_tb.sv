@@ -4,7 +4,7 @@
 module lut_waveform_gen_tb;
 
     // Test parameters
-    parameter CLOCK_FREQUENCY = 51200000;  // 51.2 MSPS logical sample rate
+    parameter CLOCK_FREQUENCY = 64000000;  // 64 MSPS logical sample rate
     parameter PHASE_WIDTH = 32;
     parameter DATA_WIDTH = 14;
     parameter LUT_ADDR_WIDTH = 12;
@@ -42,10 +42,10 @@ module lut_waveform_gen_tb;
         .valid_out(valid_out)
     );
 
-    // Clock generation (51.2 MHz => half-period = 9.765625 ns)
+    // Clock generation (64 MHz => half-period = 7.8125 ns)
     initial begin
         clk = 0;
-        forever #9.765625 clk = ~clk;
+        forever #7.8125 clk = ~clk;
     end
 
     // Reset generation
@@ -377,7 +377,7 @@ module lut_waveform_gen_tb;
 
         // Test 2: 100 kHz (low tone)
         // Max zero-crossing quantization error ~= 1/Ncrossings.
-        // 100 kHz x 200000/51.2MHz ~= 390 crossings => error < 0.26%.
+        // 100 kHz x 200000/64MHz ~= 312 crossings => error < 0.33%.
         // Tolerance 5000 ppm (0.5%) covers quantization safely.
         $display("\nTEST 2: 100 kHz low tone");
         $display("----------------------------------------");
@@ -385,14 +385,14 @@ module lut_waveform_gen_tb;
         if (!test_ok_1) total_failures = total_failures + 1;
 
         // Test 3: 2 MHz
-        // ~1953 crossings, quantization error < 0.06%. Tolerance 1000 ppm (0.1%).
+        // ~1562 crossings, quantization error < 0.07%. Tolerance 1000 ppm (0.1%).
         $display("\nTEST 3: 2 MHz tone");
         $display("----------------------------------------");
         run_frequency_test(2000000, 50000, 1000, 0, measured_freq_2, test_ok_2);
         if (!test_ok_2) total_failures = total_failures + 1;
 
         // Test 4: 10 MHz (higher in-band tone)
-        // ~9766 crossings, quantization error < 0.01%. Tolerance 1000 ppm (0.1%).
+        // ~7812 crossings, quantization error < 0.02%. Tolerance 1000 ppm (0.1%).
         $display("\nTEST 4: 10 MHz in-band tone");
         $display("----------------------------------------");
         run_frequency_test(10000000, 50000, 1000, 0, measured_freq_3, test_ok_3);

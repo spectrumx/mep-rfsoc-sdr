@@ -6,18 +6,19 @@
 // Generates sine/cosine waveforms and outputs them to an RF-DAC via AXI4-Stream.
 //
 // RFDC stream contract:
-//   - m00_axis_tdata: 160 bits (10 signed 16-bit words)
-//   - 10 words per beat = 5 interleaved complex samples (I0,Q0,I1,Q1,...,I4,Q4)
-//   - m00_axis_aclk: 10.240 MHz AXIS beat clock
-//   - Logical complex sample rate: 51.2 MSPS
+//   - m00_axis_tdata: 64 bits (4 signed 16-bit words)
+//   - 4 words per beat = 2 interleaved complex samples (I0,Q0,I1,Q1)
+//   - m00_axis_aclk: 32 MHz AXIS beat clock
+//   - Logical complex sample rate: 64 MSPS
+//   - DAC sampling rate: 1024 MSPS, interpolation: 16
 //   - One beat emitted every AXIS clock cycle when enabled
 //
-// Implementation: 5 lut_waveform_gen instances, each advancing 5 phase steps
-// per clock (SAMPLES_PER_CLOCK=5), with phase_step_offset 0..4 to produce
-// 5 consecutive samples from one beat.
+// Implementation: 2 lut_waveform_gen instances, each advancing 2 phase steps
+// per clock (SAMPLES_PER_CLOCK=2), with phase_step_offset 0..1 to produce
+// 2 consecutive samples from one beat.
 //
 // Startup: a 2-cycle pipeline flush ensures the first accepted beat contains
-// five distinct consecutive samples, not stale reset-state values.
+// two distinct consecutive samples, not stale reset-state values.
 //
 // Backpressure: under backpressure (tvalid && !tready), the waveform generators
 // continue advancing internally. Dropped samples cause the output waveform to
@@ -131,7 +132,7 @@ module function_gen_to_dac_1_0 #
     parameter integer C_S00_AXI_ADDR_WIDTH    = 7,
 
     // RFDC DAC AXI4-Stream master bus parameters
-    parameter integer C_M00_AXIS_TDATA_WIDTH  = 160
+    parameter integer C_M00_AXIS_TDATA_WIDTH  = 64
 )
 (
     // Ports of Axi Slave Bus Interface S00_AXI
@@ -167,11 +168,11 @@ module function_gen_to_dac_1_0 #
 
     // RFDC stream localparams
     localparam integer WORD_WIDTH              = 16;
-    localparam integer WORDS_PER_BEAT          = 10;
-    localparam integer COMPLEX_SAMPLES_PER_BEAT = 5;
+    localparam integer WORDS_PER_BEAT          = 4;
+    localparam integer COMPLEX_SAMPLES_PER_BEAT = 2;
 
-    // Logical sample rate for the NCO (51.2 MSPS)
-    localparam integer LOGICAL_SAMPLE_RATE     = 51200000;
+    // Logical sample rate for the NCO (64 MSPS)
+    localparam integer LOGICAL_SAMPLE_RATE     = 64000000;
 
     // Phase accumulator width (must match lut_waveform_gen)
     localparam integer PHASE_WIDTH             = 32;
@@ -189,7 +190,7 @@ module function_gen_to_dac_1_0 #
     // other bits reflect the new value).
     //
     // AXI4-Lite write domain:  s00_axi_aclk (156.25 MHz typical)
-    // DAC stream consume domain: m00_axis_aclk (10.240 MHz)
+    // DAC stream consume domain: m00_axis_aclk (32 MHz)
     //
     // Shadow registers are written in AXI domain and read back by AXI4-Lite master.
     // They are NOT consumed by the DAC stream datapath (Step 2.5.5).
@@ -261,36 +262,21 @@ module function_gen_to_dac_1_0 #
     assign phase_inc_64 = (cfg_dac_frequency * (64'd1 << PHASE_WIDTH)) / LOGICAL_SAMPLE_RATE;
     assign phase_inc = phase_inc_64[PHASE_WIDTH-1:0];
 
-    // Phase step offsets for samples 0..4
+    // Phase step offsets for samples 0..1
     wire [31:0] phase_step0;
     wire [31:0] phase_step1;
-    wire [31:0] phase_step2;
-    wire [31:0] phase_step3;
-    wire [31:0] phase_step4;
     assign phase_step0 = 32'd0;
     assign phase_step1 = phase_inc;
-    assign phase_step2 = phase_inc + phase_inc;
-    assign phase_step3 = phase_inc + phase_inc + phase_inc;
-    assign phase_step4 = phase_inc + phase_inc + phase_inc + phase_inc;
 
     // Waveform generator outputs (signed 14-bit)
     wire signed [13:0] sine0;
     wire signed [13:0] cosine0;
     wire signed [13:0] sine1;
     wire signed [13:0] cosine1;
-    wire signed [13:0] sine2;
-    wire signed [13:0] cosine2;
-    wire signed [13:0] sine3;
-    wire signed [13:0] cosine3;
-    wire signed [13:0] sine4;
-    wire signed [13:0] cosine4;
 
     // Separate valid wires for each generator instance
     wire valid0;
     wire valid1;
-    wire valid2;
-    wire valid3;
-    wire valid4;
 
     // Sample 0: current phase
     lut_waveform_gen #(
@@ -330,68 +316,11 @@ module function_gen_to_dac_1_0 #
          .valid_out(valid1)
     );
 
-    // Sample 2: phase + 2 steps
-    lut_waveform_gen #(
-        .CLOCK_FREQUENCY(LOGICAL_SAMPLE_RATE),
-        .PHASE_WIDTH(PHASE_WIDTH),
-        .DATA_WIDTH(14),
-        .LUT_ADDR_WIDTH(12),
-        .SAMPLES_PER_CLOCK(COMPLEX_SAMPLES_PER_BEAT)
-  ) u_wave2 (
-     .clk(m00_axis_aclk),
-          .rst_n(m00_axis_aresetn),
-          .frequency(cfg_dac_frequency),
-          .phase_offset(cfg_dac_phase),
-          .phase_step_offset(phase_step2),
-          .en(cfg_dac_enable[0]),
-         .sine_out(sine2),
-         .cosine_out(cosine2),
-         .valid_out(valid2)
-    );
-
-    // Sample 3: phase + 3 steps
-    lut_waveform_gen #(
-        .CLOCK_FREQUENCY(LOGICAL_SAMPLE_RATE),
-        .PHASE_WIDTH(PHASE_WIDTH),
-        .DATA_WIDTH(14),
-        .LUT_ADDR_WIDTH(12),
-        .SAMPLES_PER_CLOCK(COMPLEX_SAMPLES_PER_BEAT)
-) u_wave3 (
-   .clk(m00_axis_aclk),
-          .rst_n(m00_axis_aresetn),
-          .frequency(cfg_dac_frequency),
-          .phase_offset(cfg_dac_phase),
-          .phase_step_offset(phase_step3),
-          .en(cfg_dac_enable[0]),
-         .sine_out(sine3),
-         .cosine_out(cosine3),
-         .valid_out(valid3)
-    );
-
-    // Sample 4: phase + 4 steps
-    lut_waveform_gen #(
-        .CLOCK_FREQUENCY(LOGICAL_SAMPLE_RATE),
-        .PHASE_WIDTH(PHASE_WIDTH),
-        .DATA_WIDTH(14),
-        .LUT_ADDR_WIDTH(12),
-        .SAMPLES_PER_CLOCK(COMPLEX_SAMPLES_PER_BEAT)
-) u_wave4 (
- .clk(m00_axis_aclk),
-          .rst_n(m00_axis_aresetn),
-          .frequency(cfg_dac_frequency),
-          .phase_offset(cfg_dac_phase),
-          .phase_step_offset(phase_step4),
-          .en(cfg_dac_enable[0]),
-         .sine_out(sine4),
-         .cosine_out(cosine4),
-         .valid_out(valid4)
-    );
-
     // All generators share the same phase accumulator advancement, so
     // their valid signals should all transition at the same time.
     // Use valid0 as the representative pipeline-valid indicator.
     wire all_valid;
-    assign all_valid = valid0 && valid1 && valid2 && valid3 && valid4;
+    assign all_valid = valid0 && valid1;
 
     // Step 2.6: Waveform-type mode selection
     //   0: zero output mode (tvalid=0)
@@ -406,7 +335,7 @@ module function_gen_to_dac_1_0 #
     // then outputs are read from the latched address). When enable transitions
     // from 0 to 1, the first beat's LUT outputs may contain stale data from
     // the disabled state. A 2-cycle delay after enable ensures the pipeline
-    // has flushed and all 5 generators produce distinct consecutive samples.
+    // has flushed and both generators produce distinct consecutive samples.
     reg enable_d1;
     wire enable_rise;
     reg [1:0] startup_count;
@@ -450,17 +379,11 @@ module function_gen_to_dac_1_0 #
             output_valid <= 1'b0;
         end else begin
             // Step 2.6: waveform-type multiplexing
-            // Mode 1 (sine): pack 10 signed 16-bit RF-DAC words from 5 complex LUT samples.
-            // Mode 2 (DC): pack 5 repeated DC I/Q samples from offset register.
+            // Mode 1 (sine): pack 4 signed 16-bit RF-DAC words from 2 complex LUT samples.
+            // Mode 2 (DC): pack 2 repeated DC I/Q samples from offset register.
             // Mode 0/other (zero): tdata holds last registered value; tvalid forced low.
             if (cfg_dac_waveform_type === 32'd1) begin
                 output_data <= {
-                    dac_word_from_sample(cosine4, cfg_dac_amplitude[15:0], cfg_dac_offset[13:0]),   // word9  Q4
-                    dac_word_from_sample(sine4,   cfg_dac_amplitude[15:0], cfg_dac_offset[13:0]),   // word8  I4
-                    dac_word_from_sample(cosine3, cfg_dac_amplitude[15:0], cfg_dac_offset[13:0]),   // word7  Q3
-                    dac_word_from_sample(sine3,   cfg_dac_amplitude[15:0], cfg_dac_offset[13:0]),   // word6  I3
-                    dac_word_from_sample(cosine2, cfg_dac_amplitude[15:0], cfg_dac_offset[13:0]),   // word5  Q2
-                    dac_word_from_sample(sine2,   cfg_dac_amplitude[15:0], cfg_dac_offset[13:0]),   // word4  I2
                     dac_word_from_sample(cosine1, cfg_dac_amplitude[15:0], cfg_dac_offset[13:0]),   // word3  Q1
                     dac_word_from_sample(sine1,   cfg_dac_amplitude[15:0], cfg_dac_offset[13:0]),   // word2  I1
                     dac_word_from_sample(cosine0, cfg_dac_amplitude[15:0], cfg_dac_offset[13:0]),   // word1  Q0
@@ -468,9 +391,6 @@ module function_gen_to_dac_1_0 #
                 };
             end else if (cfg_dac_waveform_type === 32'd2) begin
                 output_data <= {
-                    dc_q_word, dc_i_word,
-                    dc_q_word, dc_i_word,
-                    dc_q_word, dc_i_word,
                     dc_q_word, dc_i_word,
                     dc_q_word, dc_i_word
                 };
@@ -606,9 +526,10 @@ module function_gen_to_dac_1_0 #
     end
 
     // Write response valid signal (declared before ready assigns)
-    reg bvalid_reg;
+   reg bvalid_reg;
+    reg write_txn_triggered;
 
-    // Ready signals: accept when no pending channel and no outstanding response
+    // AWREADY/WREADY: only accept when no pending channel and no pending response
     assign s00_axi_awready = !pending_aw && !bvalid_reg;
     assign s00_axi_wready  = !pending_w  && !bvalid_reg;
 
@@ -687,6 +608,27 @@ module function_gen_to_dac_1_0 #
     // On CDC ack edge while pending+dirty: reload publish from shadow,
     // toggle again, clear dirty, stay pending.
     // On CDC ack edge while pending+clean: clear pending.
+    // Register the write-transaction trigger one cycle early, so the publish
+    // fires on the cycle AFTER the write is accepted.  This gives subsequent
+    // writes a window to arrive and set cfg_dirty before the publish toggles
+    // cfg_req_toggle (coalescing window).
+    wire write_txn = pending_aw && pending_w && !bvalid_reg;
+
+    always @(posedge s00_axi_aclk or negedge s00_axi_aresetn) begin
+        if (!s00_axi_aresetn) begin
+            write_txn_triggered <= 1'b0;
+        end else begin
+            write_txn_triggered <= write_txn;
+        end
+    end
+
+    // Step 2.5.3+2.5.4: Publish bundle and pending/dirty state machine (AXI domain)
+    // On first write with no pending request: load full publish bundle from
+    // next_* wires (post-write values), toggle cfg_req_toggle, set pending.
+    // On write while pending: set dirty, leave publish unchanged.
+    // On CDC ack edge while pending+dirty: reload publish from shadow,
+    // toggle again, clear dirty, stay pending.
+    // On CDC ack edge while pending+clean: clear pending.
     always @(posedge s00_axi_aclk or negedge s00_axi_aresetn) begin
         if (!s00_axi_aresetn) begin
             cfg_pub_waveform_type <= 32'h0;
@@ -715,15 +657,15 @@ module function_gen_to_dac_1_0 #
                     // Clean ack: clear pending
                     cfg_req_pending       <= 1'b0;
                 end
-            end else if (pending_aw && pending_w && !bvalid_reg) begin
+            end else if (write_txn_triggered) begin
                 if (!cfg_req_pending) begin
-                    // First write: publish full bundle with post-write values
-                    cfg_pub_waveform_type <= next_waveform_type;
-                    cfg_pub_frequency     <= next_frequency;
-                    cfg_pub_amplitude     <= next_amplitude;
-                    cfg_pub_phase         <= next_phase;
-                    cfg_pub_offset        <= next_offset;
-                    cfg_pub_enable        <= next_enable;
+                    // First write (deferred one cycle): publish full bundle with post-write values
+                    cfg_pub_waveform_type <= waveform_type_shadow;
+                    cfg_pub_frequency     <= frequency_shadow;
+                    cfg_pub_amplitude     <= amplitude_shadow;
+                    cfg_pub_phase         <= phase_shadow;
+                    cfg_pub_offset        <= offset_shadow;
+                    cfg_pub_enable        <= enable_shadow;
                     cfg_req_toggle        <= ~cfg_req_toggle;
                     cfg_req_pending       <= 1'b1;
                     cfg_dirty             <= 1'b0;
@@ -731,6 +673,9 @@ module function_gen_to_dac_1_0 #
                     // Write while request pending: coalesce into dirty
                     cfg_dirty             <= 1'b1;
                 end
+            end else if (write_txn && cfg_req_pending) begin
+                // Same-cycle coalescing: write arrives while pending, set dirty immediately
+                cfg_dirty <= 1'b1;
             end
         end
     end

@@ -9,12 +9,12 @@ module function_gen_to_dac_tb;
     // Test parameters
     parameter C_S00_AXI_DATA_WIDTH = 32;
     parameter C_S00_AXI_ADDR_WIDTH = 7;
-    parameter C_M00_AXIS_TDATA_WIDTH = 160;
+    parameter C_M00_AXIS_TDATA_WIDTH = 64;
 
     // RFDC stream localparams (must match DUT)
     localparam integer WORD_WIDTH              = 16;
-    localparam integer WORDS_PER_BEAT          = 10;
-    localparam integer COMPLEX_SAMPLES_PER_BEAT = 5;
+    localparam integer WORDS_PER_BEAT          = 4;
+    localparam integer COMPLEX_SAMPLES_PER_BEAT = 2;
 
     // AXI4-Lite signals
     reg s00_axi_aclk;
@@ -39,7 +39,7 @@ module function_gen_to_dac_tb;
     wire s00_axi_rvalid;
     reg s00_axi_rready;
 
-    // AXIS master interface signals (10.240 MHz)
+    // AXIS master interface signals (32 MHz)
     reg m00_axis_aclk;
     reg m00_axis_aresetn;
     wire m00_axis_tvalid;
@@ -86,10 +86,10 @@ module function_gen_to_dac_tb;
         forever #3.2ns s00_axi_aclk = ~s00_axi_aclk;
     end
 
-    // AXIS beat clock: 10.240 MHz (half-period = 48.828125 ns)
+    // AXIS beat clock: 32 MHz (half-period = 15.625 ns)
     initial begin
         m00_axis_aclk = 0;
-        forever #48.828125ns m00_axis_aclk = ~m00_axis_aclk;
+        forever #15.625ns m00_axis_aclk = ~m00_axis_aclk;
     end
 
     // Reset generation
@@ -112,12 +112,6 @@ module function_gen_to_dac_tb;
     reg signed [15:0] dec_word1;
     reg signed [15:0] dec_word2;
     reg signed [15:0] dec_word3;
-    reg signed [15:0] dec_word4;
-    reg signed [15:0] dec_word5;
-    reg signed [15:0] dec_word6;
-    reg signed [15:0] dec_word7;
-    reg signed [15:0] dec_word8;
-    reg signed [15:0] dec_word9;
     integer has_xz;
 
     // Step 2.2 variables
@@ -151,21 +145,38 @@ module function_gen_to_dac_tb;
     // Step 2.5.1: Baseline dynamic-update test variables
     integer dynamic_failures;
 
-    // Decode helper: extract 10 signed 16-bit words from 160-bit tdata
+    // Decode helper: extract 4 signed 16-bit words from 64-bit tdata
     task automatic decode_beat(
-        input  [159:0] tdata
+        input  [63:0] tdata
     );
         dec_word0 = tdata[15:0];
         dec_word1 = tdata[31:16];
         dec_word2 = tdata[47:32];
         dec_word3 = tdata[63:48];
-        dec_word4 = tdata[79:64];
-        dec_word5 = tdata[95:80];
-        dec_word6 = tdata[111:96];
-        dec_word7 = tdata[127:112];
-        dec_word8 = tdata[143:128];
-        dec_word9 = tdata[159:144];
     endtask
+
+    function automatic integer beat_has_xz;
+        begin
+            beat_has_xz = $isunknown(dec_word0) || $isunknown(dec_word1) ||
+                           $isunknown(dec_word2) || $isunknown(dec_word3);
+        end
+    endfunction
+
+    function automatic integer beat_out_of_range;
+        begin
+            beat_out_of_range =
+                dec_word0 < -32768 || dec_word0 > 32764 ||
+                dec_word1 < -32768 || dec_word1 > 32764 ||
+                dec_word2 < -32768 || dec_word2 > 32764 ||
+                dec_word3 < -32768 || dec_word3 > 32764;
+        end
+    endfunction
+
+    function automatic integer beat_samples_identical;
+        begin
+            beat_samples_identical = (dec_word0 == dec_word2) && (dec_word1 == dec_word3);
+        end
+    endfunction
 
         // Step 2.3: Conversion helpers (mirror DUT functions for unit testing)
     function automatic signed [13:0] sat_to_signed_14(
@@ -522,8 +533,8 @@ module function_gen_to_dac_tb;
         $display("AXIS tdata width: %0d bits", C_M00_AXIS_TDATA_WIDTH);
         $display("Words per beat: %0d", WORDS_PER_BEAT);
         $display("Complex samples per beat: %0d", COMPLEX_SAMPLES_PER_BEAT);
-        $display("AXIS beat clock: 10.240 MHz");
-        $display("Logical sample rate: 51.2 MSPS");
+        $display("AXIS beat clock: 32 MHz");
+        $display("Logical sample rate: 64 MSPS");
         $display("========================================\n");
 
      // Configure DUT via AXI4-Lite
@@ -886,7 +897,24 @@ module function_gen_to_dac_tb;
         write_register(7'h03, 32'd0);
         write_register(7'h04, 32'd0);
         write_register(7'h05, 32'd1);
-        repeat (8) @(posedge m00_axis_aclk);
+
+        // Wait for CDC round-trip and DUT startup (enable propagation + startup guard)
+        // CDC: AXI->DAC synchronizer (~2 AXIS cycles) + DAC capture + DAC->AXI ack (~2 AXI cycles)
+        // Startup guard: 2 AXIS cycles after enable rise in DAC domain
+        // Total: ~5-6 AXIS cycles minimum; use 20 for margin
+        begin
+            integer startup_wait;
+            startup_wait = 0;
+            while (!m00_axis_tvalid && startup_wait < 500) begin
+                @(posedge m00_axis_aclk);
+                startup_wait = startup_wait + 1;
+            end
+            if (startup_wait >= 500) begin
+                $display("  WARN: DUT did not start streaming within 500 AXIS cycles after enable");
+            end
+        end
+        // Additional settling cycles after first tvalid
+        repeat (10) @(posedge m00_axis_aclk);
 
         // Reset AXIS monitor state after register restoration
         accepted_beats = 0;
@@ -924,11 +952,7 @@ module function_gen_to_dac_tb;
 
                 // Check for X/Z
                 has_xz = 0;
-                if ($isunknown(dec_word0) || $isunknown(dec_word1) ||
-                    $isunknown(dec_word2) || $isunknown(dec_word3) ||
-                    $isunknown(dec_word4) || $isunknown(dec_word5) ||
-                    $isunknown(dec_word6) || $isunknown(dec_word7) ||
-                    $isunknown(dec_word8) || $isunknown(dec_word9)) begin
+                if (beat_has_xz()) begin
                     has_xz = 1;
                 end
 
@@ -936,12 +960,8 @@ module function_gen_to_dac_tb;
                 // For a 2 MHz tone, consecutive samples should differ by at least
                 // a few LSBs. Check that no two consecutive I or Q samples are identical.
                 if (accepted_beats > 0) begin
-                    if (dec_word0 == dec_word2 && dec_word1 == dec_word3 &&
-                        dec_word2 == dec_word4 && dec_word3 == dec_word5 &&
-                        dec_word4 == dec_word6 && dec_word5 == dec_word7 &&
-                        dec_word6 == dec_word8 && dec_word7 == dec_word9) begin
-                        // All 5 samples are identical - invalid for nonzero tone
-                        $display("  Beat %0d: FAIL - all 5 samples identical (I=%d Q=%d)",
+                    if (beat_samples_identical()) begin
+                        $display("  Beat %0d: FAIL - both samples identical (I=%d Q=%d)",
                                  accepted_beats, dec_word0, dec_word1);
                         intra_beat_failures = intra_beat_failures + 1;
                     end
@@ -956,22 +976,13 @@ module function_gen_to_dac_tb;
                         continuity_failures = continuity_failures + 1;
                     end
                 end
-                prev_last_i = dec_word8;
-                prev_last_q = dec_word9;
+                prev_last_i = dec_word2;
+                prev_last_q = dec_word3;
                 prev_last_valid = 1;
 
                 // Step 2.3: RF-DAC word range check
                 // After conversion, valid range is [-32768, +32764].
-                if (!has_xz && (dec_word0 < -32768 || dec_word0 > 32764 ||
-                    dec_word1 < -32768 || dec_word1 > 32764 ||
-                    dec_word2 < -32768 || dec_word2 > 32764 ||
-                    dec_word3 < -32768 || dec_word3 > 32764 ||
-                    dec_word4 < -32768 || dec_word4 > 32764 ||
-                    dec_word5 < -32768 || dec_word5 > 32764 ||
-                    dec_word6 < -32768 || dec_word6 > 32764 ||
-                    dec_word7 < -32768 || dec_word7 > 32764 ||
-                    dec_word8 < -32768 || dec_word8 > 32764 ||
-                    dec_word9 < -32768 || dec_word9 > 32764)) begin
+                if (!has_xz && beat_out_of_range()) begin
                     $display("  Beat %0d: FAIL - RF-DAC word out of range [%d..%d]",
                              accepted_beats, -32768, 32764);
                     dac_range_failures = dac_range_failures + 1;
@@ -981,17 +992,14 @@ module function_gen_to_dac_tb;
                     $display("  Beat %0d: FAIL - X/Z detected in tdata", accepted_beats);
                     beat_failures = beat_failures + 1;
                 end else if (accepted_beats <= 3 || accepted_beats == MIN_BEATS) begin
-                    $display("  Beat %0d: I0=%6d Q0=%6d I1=%6d Q1=%6d I2=%6d Q2=%6d I3=%6d Q3=%6d I4=%6d Q4=%6d",
+                    $display("  Beat %0d: I0=%6d Q0=%6d I1=%6d Q1=%6d",
                              accepted_beats,
                              dec_word0, dec_word1,
-                             dec_word2, dec_word3,
-                             dec_word4, dec_word5,
-                             dec_word6, dec_word7,
-                             dec_word8, dec_word9);
+                             dec_word2, dec_word3);
                 end
 
                 // Zero-crossing count on I channel for frequency measurement
-                // Check all 5 I-samples within the beat for zero crossings
+                // Check both I-samples within the beat for zero crossings
                 if (total_samples > 0) begin
                     if ((prev_i[15] == 1'b1 && dec_word0[15] == 1'b0) ||
                         (prev_i[15] == 1'b0 && dec_word0[15] == 1'b1)) begin
@@ -1001,20 +1009,8 @@ module function_gen_to_dac_tb;
                         (dec_word0[15] == 1'b0 && dec_word2[15] == 1'b1)) begin
                         zero_crossings = zero_crossings + 1;
                     end
-                    if ((dec_word2[15] == 1'b1 && dec_word4[15] == 1'b0) ||
-                        (dec_word2[15] == 1'b0 && dec_word4[15] == 1'b1)) begin
-                        zero_crossings = zero_crossings + 1;
-                    end
-                    if ((dec_word4[15] == 1'b1 && dec_word6[15] == 1'b0) ||
-                        (dec_word4[15] == 1'b0 && dec_word6[15] == 1'b1)) begin
-                        zero_crossings = zero_crossings + 1;
-                    end
-                    if ((dec_word6[15] == 1'b1 && dec_word8[15] == 1'b0) ||
-                        (dec_word6[15] == 1'b0 && dec_word8[15] == 1'b1)) begin
-                        zero_crossings = zero_crossings + 1;
-                    end
                 end
-                prev_i = dec_word8;
+                prev_i = dec_word2;
                 prev_i_valid = 1;
                 total_samples = total_samples + COMPLEX_SAMPLES_PER_BEAT;
 
@@ -1351,14 +1347,14 @@ module function_gen_to_dac_tb;
         $display("  Word width: 16 bits (signed, MSB-aligned)");
         $display("  RF-DAC format: saturate to [-8192,+8191], then <<< 2");
         $display("  Expected output range: [-32768, +32764]");
-        $display("  Word order: I0, Q0, I1, Q1, I2, Q2, I3, Q3, I4, Q4");
+        $display("  Word order: I0, Q0, I1, Q1");
 
         // Frequency measurement
         $display("\nFREQUENCY MEASUREMENT:");
         $display("----------------------------------------");
         expected_freq = 2000000.0;
         if (total_samples > MIN_BEATS * COMPLEX_SAMPLES_PER_BEAT / 2) begin
-            measured_freq = zero_crossings * 51200000.0 / (2.0 * total_samples);
+            measured_freq = zero_crossings * 64000000.0 / (2.0 * total_samples);
             $display("  Expected frequency: %0.0f Hz", expected_freq);
             $display("  Total samples: %0d", total_samples);
             $display("  Zero crossings: %0d", zero_crossings);
@@ -1416,29 +1412,13 @@ module function_gen_to_dac_tb;
                 if (m00_axis_tvalid && m00_axis_tready) begin
                     dyn_beats = dyn_beats + 1;
                     decode_beat(m00_axis_tdata);
-                    if ($isunknown(dec_word0) || $isunknown(dec_word1) ||
-                        $isunknown(dec_word2) || $isunknown(dec_word3) ||
-                        $isunknown(dec_word4) || $isunknown(dec_word5) ||
-                        $isunknown(dec_word6) || $isunknown(dec_word7) ||
-                        $isunknown(dec_word8) || $isunknown(dec_word9)) begin
+                    if (beat_has_xz()) begin
                         dyn_xz = dyn_xz + 1;
                     end
-                    if (dec_word0 < -32768 || dec_word0 > 32764 ||
-                        dec_word1 < -32768 || dec_word1 > 32764 ||
-                        dec_word2 < -32768 || dec_word2 > 32764 ||
-                        dec_word3 < -32768 || dec_word3 > 32764 ||
-                        dec_word4 < -32768 || dec_word4 > 32764 ||
-                        dec_word5 < -32768 || dec_word5 > 32764 ||
-                        dec_word6 < -32768 || dec_word6 > 32764 ||
-                        dec_word7 < -32768 || dec_word7 > 32764 ||
-                        dec_word8 < -32768 || dec_word8 > 32764 ||
-                        dec_word9 < -32768 || dec_word9 > 32764) begin
+                    if (beat_out_of_range()) begin
                         dyn_range = dyn_range + 1;
                     end
-                    if (dec_word0 == dec_word2 && dec_word1 == dec_word3 &&
-                        dec_word2 == dec_word4 && dec_word3 == dec_word5 &&
-                        dec_word4 == dec_word6 && dec_word5 == dec_word7 &&
-                        dec_word6 == dec_word8 && dec_word7 == dec_word9) begin
+                    if (beat_samples_identical()) begin
                         dyn_identical = dyn_identical + 1;
                     end
                     if (dec_word0 < dyn_min) dyn_min = dec_word0;
@@ -1477,29 +1457,13 @@ module function_gen_to_dac_tb;
                 if (m00_axis_tvalid && m00_axis_tready) begin
                     dyn_beats = dyn_beats + 1;
                     decode_beat(m00_axis_tdata);
-                    if ($isunknown(dec_word0) || $isunknown(dec_word1) ||
-                        $isunknown(dec_word2) || $isunknown(dec_word3) ||
-                        $isunknown(dec_word4) || $isunknown(dec_word5) ||
-                        $isunknown(dec_word6) || $isunknown(dec_word7) ||
-                        $isunknown(dec_word8) || $isunknown(dec_word9)) begin
+                    if (beat_has_xz()) begin
                         dyn_xz = dyn_xz + 1;
                     end
-                    if (dec_word0 < -32768 || dec_word0 > 32764 ||
-                        dec_word1 < -32768 || dec_word1 > 32764 ||
-                        dec_word2 < -32768 || dec_word2 > 32764 ||
-                        dec_word3 < -32768 || dec_word3 > 32764 ||
-                        dec_word4 < -32768 || dec_word4 > 32764 ||
-                        dec_word5 < -32768 || dec_word5 > 32764 ||
-                        dec_word6 < -32768 || dec_word6 > 32764 ||
-                        dec_word7 < -32768 || dec_word7 > 32764 ||
-                        dec_word8 < -32768 || dec_word8 > 32764 ||
-                        dec_word9 < -32768 || dec_word9 > 32764) begin
+                    if (beat_out_of_range()) begin
                         dyn_range = dyn_range + 1;
                     end
-                    if (dec_word0 == dec_word2 && dec_word1 == dec_word3 &&
-                        dec_word2 == dec_word4 && dec_word3 == dec_word5 &&
-                        dec_word4 == dec_word6 && dec_word5 == dec_word7 &&
-                        dec_word6 == dec_word8 && dec_word7 == dec_word9) begin
+                    if (beat_samples_identical()) begin
                         dyn_identical = dyn_identical + 1;
                     end
                     if (dec_word0 < dyn_min) dyn_min = dec_word0;
@@ -1538,29 +1502,13 @@ module function_gen_to_dac_tb;
                 if (m00_axis_tvalid && m00_axis_tready) begin
                     dyn_beats = dyn_beats + 1;
                     decode_beat(m00_axis_tdata);
-                    if ($isunknown(dec_word0) || $isunknown(dec_word1) ||
-                        $isunknown(dec_word2) || $isunknown(dec_word3) ||
-                        $isunknown(dec_word4) || $isunknown(dec_word5) ||
-                        $isunknown(dec_word6) || $isunknown(dec_word7) ||
-                        $isunknown(dec_word8) || $isunknown(dec_word9)) begin
+                    if (beat_has_xz()) begin
                         dyn_xz = dyn_xz + 1;
                     end
-                    if (dec_word0 < -32768 || dec_word0 > 32764 ||
-                        dec_word1 < -32768 || dec_word1 > 32764 ||
-                        dec_word2 < -32768 || dec_word2 > 32764 ||
-                        dec_word3 < -32768 || dec_word3 > 32764 ||
-                        dec_word4 < -32768 || dec_word4 > 32764 ||
-                        dec_word5 < -32768 || dec_word5 > 32764 ||
-                        dec_word6 < -32768 || dec_word6 > 32764 ||
-                        dec_word7 < -32768 || dec_word7 > 32764 ||
-                        dec_word8 < -32768 || dec_word8 > 32764 ||
-                        dec_word9 < -32768 || dec_word9 > 32764) begin
+                    if (beat_out_of_range()) begin
                         dyn_range = dyn_range + 1;
                     end
-                    if (dec_word0 == dec_word2 && dec_word1 == dec_word3 &&
-                        dec_word2 == dec_word4 && dec_word3 == dec_word5 &&
-                        dec_word4 == dec_word6 && dec_word5 == dec_word7 &&
-                        dec_word6 == dec_word8 && dec_word7 == dec_word9) begin
+                    if (beat_samples_identical()) begin
                         dyn_identical = dyn_identical + 1;
                     end
                     if (dec_word0 < dyn_min) dyn_min = dec_word0;
@@ -1630,23 +1578,10 @@ module function_gen_to_dac_tb;
                 if (m00_axis_tvalid && m00_axis_tready) begin
                     dyn_beats = dyn_beats + 1;
                     decode_beat(m00_axis_tdata);
-                    if ($isunknown(dec_word0) || $isunknown(dec_word1) ||
-                        $isunknown(dec_word2) || $isunknown(dec_word3) ||
-                        $isunknown(dec_word4) || $isunknown(dec_word5) ||
-                        $isunknown(dec_word6) || $isunknown(dec_word7) ||
-                        $isunknown(dec_word8) || $isunknown(dec_word9)) begin
+                    if (beat_has_xz()) begin
                         dyn_xz = dyn_xz + 1;
                     end
-                    if (dec_word0 < -32768 || dec_word0 > 32764 ||
-                        dec_word1 < -32768 || dec_word1 > 32764 ||
-                        dec_word2 < -32768 || dec_word2 > 32764 ||
-                        dec_word3 < -32768 || dec_word3 > 32764 ||
-                        dec_word4 < -32768 || dec_word4 > 32764 ||
-                        dec_word5 < -32768 || dec_word5 > 32764 ||
-                        dec_word6 < -32768 || dec_word6 > 32764 ||
-                        dec_word7 < -32768 || dec_word7 > 32764 ||
-                        dec_word8 < -32768 || dec_word8 > 32764 ||
-                        dec_word9 < -32768 || dec_word9 > 32764) begin
+                    if (beat_out_of_range()) begin
                         dyn_range = dyn_range + 1;
                     end
                 end
@@ -2205,26 +2140,13 @@ module function_gen_to_dac_tb;
                             $display("    PASS: Q0=%d near 0 (cosine quadrant at 90deg)", dec_word1);
 
                         // Verify no X/Z
-                        if ($isunknown(dec_word0) || $isunknown(dec_word1) ||
-                            $isunknown(dec_word2) || $isunknown(dec_word3) ||
-                            $isunknown(dec_word4) || $isunknown(dec_word5) ||
-                            $isunknown(dec_word6) || $isunknown(dec_word7) ||
-                            $isunknown(dec_word8) || $isunknown(dec_word9)) begin
+                        if (beat_has_xz()) begin
                             $display("    FAIL: X/Z detected in first beat after re-enable");
                             en_phase_failures = en_phase_failures + 1;
                         end
 
                         // Verify all words in range
-                        if (dec_word0 < -32768 || dec_word0 > 32764 ||
-                            dec_word1 < -32768 || dec_word1 > 32764 ||
-                            dec_word2 < -32768 || dec_word2 > 32764 ||
-                            dec_word3 < -32768 || dec_word3 > 32764 ||
-                            dec_word4 < -32768 || dec_word4 > 32764 ||
-                            dec_word5 < -32768 || dec_word5 > 32764 ||
-                            dec_word6 < -32768 || dec_word6 > 32764 ||
-                            dec_word7 < -32768 || dec_word7 > 32764 ||
-                            dec_word8 < -32768 || dec_word8 > 32764 ||
-                            dec_word9 < -32768 || dec_word9 > 32764) begin
+                        if (beat_out_of_range()) begin
                             $display("    FAIL: out-of-range word in first beat after re-enable");
                             en_phase_failures = en_phase_failures + 1;
                         end
@@ -2347,23 +2269,10 @@ module function_gen_to_dac_tb;
                     if (m00_axis_tvalid && m00_axis_tready) begin
                         b = b + 1;
                         decode_beat(m00_axis_tdata);
-                        if ($isunknown(dec_word0) || $isunknown(dec_word1) ||
-                            $isunknown(dec_word2) || $isunknown(dec_word3) ||
-                            $isunknown(dec_word4) || $isunknown(dec_word5) ||
-                            $isunknown(dec_word6) || $isunknown(dec_word7) ||
-                            $isunknown(dec_word8) || $isunknown(dec_word9)) begin
+                        if (beat_has_xz()) begin
                             phase_xz = phase_xz + 1;
                         end
-                        if (dec_word0 < -32768 || dec_word0 > 32764 ||
-                            dec_word1 < -32768 || dec_word1 > 32764 ||
-                            dec_word2 < -32768 || dec_word2 > 32764 ||
-                            dec_word3 < -32768 || dec_word3 > 32764 ||
-                            dec_word4 < -32768 || dec_word4 > 32764 ||
-                            dec_word5 < -32768 || dec_word5 > 32764 ||
-                            dec_word6 < -32768 || dec_word6 > 32764 ||
-                            dec_word7 < -32768 || dec_word7 > 32764 ||
-                            dec_word8 < -32768 || dec_word8 > 32764 ||
-                            dec_word9 < -32768 || dec_word9 > 32764) begin
+                        if (beat_out_of_range()) begin
                             phase_range = phase_range + 1;
                         end
                     end
@@ -2662,11 +2571,7 @@ module function_gen_to_dac_tb;
                     wf_failures = wf_failures + 1;
                 end else begin
                     decode_beat(m00_axis_tdata);
-                    if ($isunknown(dec_word0) || $isunknown(dec_word1) ||
-                        $isunknown(dec_word2) || $isunknown(dec_word3) ||
-                        $isunknown(dec_word4) || $isunknown(dec_word5) ||
-                        $isunknown(dec_word6) || $isunknown(dec_word7) ||
-                        $isunknown(dec_word8) || $isunknown(dec_word9)) begin
+                    if (beat_has_xz()) begin
                         $display("    FAIL: X/Z in sine mode output");
                         wf_failures = wf_failures + 1;
                     end else
@@ -2710,23 +2615,10 @@ module function_gen_to_dac_tb;
                     if (m00_axis_tvalid) begin
                         tvalid_asserts = tvalid_asserts + 1;
                         decode_beat(m00_axis_tdata);
-                        if ($isunknown(dec_word0) || $isunknown(dec_word1) ||
-                            $isunknown(dec_word2) || $isunknown(dec_word3) ||
-                            $isunknown(dec_word4) || $isunknown(dec_word5) ||
-                            $isunknown(dec_word6) || $isunknown(dec_word7) ||
-                            $isunknown(dec_word8) || $isunknown(dec_word9)) begin
+                        if (beat_has_xz()) begin
                             xz_count = xz_count + 1;
                         end
-                        if (dec_word0 < -32768 || dec_word0 > 32764 ||
-                            dec_word1 < -32768 || dec_word1 > 32764 ||
-                            dec_word2 < -32768 || dec_word2 > 32764 ||
-                            dec_word3 < -32768 || dec_word3 > 32764 ||
-                            dec_word4 < -32768 || dec_word4 > 32764 ||
-                            dec_word5 < -32768 || dec_word5 > 32764 ||
-                            dec_word6 < -32768 || dec_word6 > 32764 ||
-                            dec_word7 < -32768 || dec_word7 > 32764 ||
-                            dec_word8 < -32768 || dec_word8 > 32764 ||
-                            dec_word9 < -32768 || dec_word9 > 32764) begin
+                        if (beat_out_of_range()) begin
                             range_count = range_count + 1;
                         end
                     end
@@ -2816,21 +2708,13 @@ module function_gen_to_dac_tb;
                     if (m00_axis_tvalid && m00_axis_tready) begin
                         dc_beats = dc_beats + 1;
                         decode_beat(m00_axis_tdata);
-                        if ($isunknown(dec_word0) || $isunknown(dec_word1) ||
-                            $isunknown(dec_word2) || $isunknown(dec_word3) ||
-                            $isunknown(dec_word4) || $isunknown(dec_word5) ||
-                            $isunknown(dec_word6) || $isunknown(dec_word7) ||
-                            $isunknown(dec_word8) || $isunknown(dec_word9)) begin
+                        if (beat_has_xz()) begin
                             dc_xz = dc_xz + 1;
                         end
-                        if (dec_word0 !== 16'h4000 || dec_word2 !== 16'h4000 ||
-                            dec_word4 !== 16'h4000 || dec_word6 !== 16'h4000 ||
-                            dec_word8 !== 16'h4000) begin
+                        if (dec_word0 !== 16'h4000 || dec_word2 !== 16'h4000) begin
                             dc_bad_i = dc_bad_i + 1;
                         end
-                        if (dec_word1 !== 16'h0000 || dec_word3 !== 16'h0000 ||
-                            dec_word5 !== 16'h0000 || dec_word7 !== 16'h0000 ||
-                            dec_word9 !== 16'h0000) begin
+                        if (dec_word1 !== 16'h0000 || dec_word3 !== 16'h0000) begin
                             dc_bad_q = dc_bad_q + 1;
                         end
                     end
@@ -2865,21 +2749,13 @@ module function_gen_to_dac_tb;
                     if (m00_axis_tvalid && m00_axis_tready) begin
                         dc_beats = dc_beats + 1;
                         decode_beat(m00_axis_tdata);
-                        if ($isunknown(dec_word0) || $isunknown(dec_word1) ||
-                            $isunknown(dec_word2) || $isunknown(dec_word3) ||
-                            $isunknown(dec_word4) || $isunknown(dec_word5) ||
-                            $isunknown(dec_word6) || $isunknown(dec_word7) ||
-                            $isunknown(dec_word8) || $isunknown(dec_word9)) begin
+                        if (beat_has_xz()) begin
                             dc_xz = dc_xz + 1;
                         end
-                        if (dec_word0 !== 16'hC000 || dec_word2 !== 16'hC000 ||
-                            dec_word4 !== 16'hC000 || dec_word6 !== 16'hC000 ||
-                            dec_word8 !== 16'hC000) begin
+                        if (dec_word0 !== 16'hC000 || dec_word2 !== 16'hC000) begin
                             dc_bad_i = dc_bad_i + 1;
                         end
-                        if (dec_word1 !== 16'h0000 || dec_word3 !== 16'h0000 ||
-                            dec_word5 !== 16'h0000 || dec_word7 !== 16'h0000 ||
-                            dec_word9 !== 16'h0000) begin
+                        if (dec_word1 !== 16'h0000 || dec_word3 !== 16'h0000) begin
                             dc_bad_q = dc_bad_q + 1;
                         end
                     end
@@ -2910,9 +2786,7 @@ module function_gen_to_dac_tb;
                     if (m00_axis_tvalid && m00_axis_tready) begin
                         dc_beats = dc_beats + 1;
                         decode_beat(m00_axis_tdata);
-                        if (dec_word0 !== 16'h7FFC || dec_word2 !== 16'h7FFC ||
-                            dec_word4 !== 16'h7FFC || dec_word6 !== 16'h7FFC ||
-                            dec_word8 !== 16'h7FFC) begin
+                        if (dec_word0 !== 16'h7FFC || dec_word2 !== 16'h7FFC) begin
                             dc_bad_i = dc_bad_i + 1;
                         end
                     end
@@ -2942,9 +2816,7 @@ module function_gen_to_dac_tb;
                     if (m00_axis_tvalid && m00_axis_tready) begin
                         dc_beats = dc_beats + 1;
                         decode_beat(m00_axis_tdata);
-                        if (dec_word0 !== 16'h8000 || dec_word2 !== 16'h8000 ||
-                            dec_word4 !== 16'h8000 || dec_word6 !== 16'h8000 ||
-                            dec_word8 !== 16'h8000) begin
+                        if (dec_word0 !== 16'h8000 || dec_word2 !== 16'h8000) begin
                             dc_bad_i = dc_bad_i + 1;
                         end
                     end
@@ -3038,33 +2910,16 @@ module function_gen_to_dac_tb;
                     if (m00_axis_tvalid && m00_axis_tready) begin
                         dc_beats = dc_beats + 1;
                         decode_beat(m00_axis_tdata);
-                        if ($isunknown(dec_word0) || $isunknown(dec_word1) ||
-                            $isunknown(dec_word2) || $isunknown(dec_word3) ||
-                            $isunknown(dec_word4) || $isunknown(dec_word5) ||
-                            $isunknown(dec_word6) || $isunknown(dec_word7) ||
-                            $isunknown(dec_word8) || $isunknown(dec_word9)) begin
+                        if (beat_has_xz()) begin
                             dc_xz = dc_xz + 1;
                         end
-                        if (dec_word0 < -32768 || dec_word0 > 32764 ||
-                            dec_word1 < -32768 || dec_word1 > 32764 ||
-                            dec_word2 < -32768 || dec_word2 > 32764 ||
-                            dec_word3 < -32768 || dec_word3 > 32764 ||
-                            dec_word4 < -32768 || dec_word4 > 32764 ||
-                            dec_word5 < -32768 || dec_word5 > 32764 ||
-                            dec_word6 < -32768 || dec_word6 > 32764 ||
-                            dec_word7 < -32768 || dec_word7 > 32764 ||
-                            dec_word8 < -32768 || dec_word8 > 32764 ||
-                            dec_word9 < -32768 || dec_word9 > 32764) begin
+                        if (beat_out_of_range()) begin
                             // Range check is already done per-word above; this catches any word
                         end
-                        if (dec_word0 !== 16'h2000 || dec_word2 !== 16'h2000 ||
-                            dec_word4 !== 16'h2000 || dec_word6 !== 16'h2000 ||
-                            dec_word8 !== 16'h2000) begin
+                        if (dec_word0 !== 16'h2000 || dec_word2 !== 16'h2000) begin
                             dc_bad_i = dc_bad_i + 1;
                         end
-                        if (dec_word1 !== 16'h0000 || dec_word3 !== 16'h0000 ||
-                            dec_word5 !== 16'h0000 || dec_word7 !== 16'h0000 ||
-                            dec_word9 !== 16'h0000) begin
+                        if (dec_word1 !== 16'h0000 || dec_word3 !== 16'h0000) begin
                             dc_bad_q = dc_bad_q + 1;
                         end
                     end
@@ -3119,11 +2974,7 @@ module function_gen_to_dac_tb;
                         if (m00_axis_tvalid && m00_axis_tready) begin
                             sine_beats = sine_beats + 1;
                             decode_beat(m00_axis_tdata);
-                            if ($isunknown(dec_word0) || $isunknown(dec_word1) ||
-                                $isunknown(dec_word2) || $isunknown(dec_word3) ||
-                                $isunknown(dec_word4) || $isunknown(dec_word5) ||
-                                $isunknown(dec_word6) || $isunknown(dec_word7) ||
-                                $isunknown(dec_word8) || $isunknown(dec_word9)) begin
+                            if (beat_has_xz()) begin
                                 sine_xz = sine_xz + 1;
                             end
                             if (dec_word0 < -32768 || dec_word0 > 32764 ||
@@ -3166,23 +3017,10 @@ module function_gen_to_dac_tb;
                     if (m00_axis_tvalid && m00_axis_tready) begin
                         safe_beats = safe_beats + 1;
                         decode_beat(m00_axis_tdata);
-                        if ($isunknown(dec_word0) || $isunknown(dec_word1) ||
-                            $isunknown(dec_word2) || $isunknown(dec_word3) ||
-                            $isunknown(dec_word4) || $isunknown(dec_word5) ||
-                            $isunknown(dec_word6) || $isunknown(dec_word7) ||
-                            $isunknown(dec_word8) || $isunknown(dec_word9)) begin
+                        if (beat_has_xz()) begin
                             safe_xz = safe_xz + 1;
                         end
-                        if (dec_word0 < -32768 || dec_word0 > 32764 ||
-                            dec_word1 < -32768 || dec_word1 > 32764 ||
-                            dec_word2 < -32768 || dec_word2 > 32764 ||
-                            dec_word3 < -32768 || dec_word3 > 32764 ||
-                            dec_word4 < -32768 || dec_word4 > 32764 ||
-                            dec_word5 < -32768 || dec_word5 > 32764 ||
-                            dec_word6 < -32768 || dec_word6 > 32764 ||
-                            dec_word7 < -32768 || dec_word7 > 32764 ||
-                            dec_word8 < -32768 || dec_word8 > 32764 ||
-                            dec_word9 < -32768 || dec_word9 > 32764) begin
+                        if (beat_out_of_range()) begin
                             safe_range = safe_range + 1;
                         end
                     end
@@ -3216,9 +3054,9 @@ module function_gen_to_dac_tb;
         $display("\n========================================");
         $display("Step 2.2 + Step 2.3 + Step 2.4.1-2.4.5 + Step 2.5.1-2.5.7 + Step 2.6.1-2.6.4 Summary");
         $display("========================================");
-        $display("  AXIS tdata width: %0d bits (expected 160)", C_M00_AXIS_TDATA_WIDTH);
-        $display("  Words per beat: %0d (expected 10)", WORDS_PER_BEAT);
-        $display("  Complex samples per beat: %0d (expected 5)", COMPLEX_SAMPLES_PER_BEAT);
+        $display("  AXIS tdata width: %0d bits (expected 64)", C_M00_AXIS_TDATA_WIDTH);
+        $display("  Words per beat: %0d (expected 4)", WORDS_PER_BEAT);
+        $display("  Complex samples per beat: %0d (expected 2)", COMPLEX_SAMPLES_PER_BEAT);
         $display("  Accepted beats: %0d (minimum 20)", accepted_beats);
         $display("  tvalid asserted cycles: %0d", tvalid_cycles);
         $display("  tvalid misses (after startup): %0d (expected 0)", tvalid_misses);
@@ -3231,25 +3069,25 @@ module function_gen_to_dac_tb;
         $display("  RF-DAC range failures: %0d", dac_range_failures);
         $display("  Conversion function failures: %0d", conv_failures);
 
-        if (C_M00_AXIS_TDATA_WIDTH != 160) begin
-            $display("  FAIL: tdata width is %0d, expected 160", C_M00_AXIS_TDATA_WIDTH);
+        if (C_M00_AXIS_TDATA_WIDTH != 64) begin
+            $display("  FAIL: tdata width is %0d, expected 64", C_M00_AXIS_TDATA_WIDTH);
             total_failures = total_failures + 1;
         end else begin
-            $display("  PASS: tdata width is 160 bits");
+            $display("  PASS: tdata width is 64 bits");
         end
 
-        if (WORDS_PER_BEAT != 10) begin
-            $display("  FAIL: WORDS_PER_BEAT is %0d, expected 10", WORDS_PER_BEAT);
+        if (WORDS_PER_BEAT != 4) begin
+            $display("  FAIL: WORDS_PER_BEAT is %0d, expected 4", WORDS_PER_BEAT);
             total_failures = total_failures + 1;
         end else begin
-            $display("  PASS: WORDS_PER_BEAT is 10");
+            $display("  PASS: WORDS_PER_BEAT is 4");
         end
 
-        if (COMPLEX_SAMPLES_PER_BEAT != 5) begin
-            $display("  FAIL: COMPLEX_SAMPLES_PER_BEAT is %0d, expected 5", COMPLEX_SAMPLES_PER_BEAT);
+        if (COMPLEX_SAMPLES_PER_BEAT != 2) begin
+            $display("  FAIL: COMPLEX_SAMPLES_PER_BEAT is %0d, expected 2", COMPLEX_SAMPLES_PER_BEAT);
             total_failures = total_failures + 1;
         end else begin
-            $display("  PASS: COMPLEX_SAMPLES_PER_BEAT is 5");
+            $display("  PASS: COMPLEX_SAMPLES_PER_BEAT is 2");
         end
 
         if (accepted_beats < 20) begin
