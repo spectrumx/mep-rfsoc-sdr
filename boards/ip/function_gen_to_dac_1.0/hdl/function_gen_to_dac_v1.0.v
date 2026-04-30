@@ -29,102 +29,6 @@
 
 `timescale 1 ns / 1 ps
 
-// Saturation helper: clamp a signed value to [-8192, +8191].
-// Used when intermediate amplitude/offset math is wider than 14 bits.
-function automatic signed [13:0] sat_to_signed_14(
-    input signed [31:0] v
-);
-    reg signed [15:0] sat_max16;
-    reg signed [15:0] sat_min16;
-    sat_max16 = 16'd8191;
-    sat_min16 = -16'd8192;
-    if      (v > sat_max16) sat_to_signed_14 = sat_max16[13:0];
-    else if (v < sat_min16) sat_to_signed_14 = sat_min16[13:0];
-    else                    sat_to_signed_14 = v[13:0];
-endfunction
-
-// Convert a signed 14-bit LUT sample to a signed 16-bit MSB-aligned RF-DAC word.
-// Applies amplitude scaling (Q15 fixed-point, amplitude[15:0]) and signed 14-bit offset,
-// saturates to [-8192, +8191], then shifts left by 2 bits.
-// Amplitude: Q15 signed fixed-point, range [0, 0x7FFF] (0 = mute, 0x7FFF ~= 1.0 full scale).
-// Offset: signed 14-bit value from cfg_dac_offset[13:0], range [-8192, +8191].
-// Formula: scaled = (sample * amplitude) >>> 15 + offset; result = saturate(scaled) * 4;
-function automatic signed [15:0] dac_word_from_sample(
-     input signed [13:0] sample,
-     input [15:0] amplitude,
-     input signed [13:0] offset
- );
-     reg [13:0] sample_mag14;
-     reg sample_sign;
-     reg [31:0] scaled_mag;
-     reg signed [31:0] scaled_signed;
-     reg signed [31:0] offset_ext;
-     reg signed [31:0] with_offset;
-     reg signed [31:0] sat_val32;
-     reg signed [31:0] sat_max;
-     reg signed [31:0] sat_min;
-
-     // Handle sign separately to avoid signed multiplication issues
-     sample_sign = sample[13];
-     if (sample_sign && sample !== 14'd8192) begin
-         sample_mag14 = -sample;
-     end else if (sample === 14'd8192) begin
-         sample_mag14 = 14'd8192; // |-8192| = 8192
-     end else begin
-         sample_mag14 = sample[13:0];
-     end
-
-     // Unsigned magnitude * amplitude, then / 32768 (with rounding)
-     scaled_mag = (sample_mag14 * amplitude + 16'd16384) >>> 15;
-
-     // Re-apply sign
-     if (sample_sign) begin
-         scaled_signed = -($signed(scaled_mag));
-     end else begin
-         scaled_signed = $signed(scaled_mag);
-     end
-
-     // Explicit sign-extension of offset
-     offset_ext = {{18{offset[13]}}, offset};
-
-     // Add offset
-     with_offset = scaled_signed + offset_ext;
-
-     // Saturate to [-8192, +8191]
-     sat_max = 32'd8191;
-     sat_min = -32'd8192;
-     if      (with_offset > sat_max) sat_val32 = sat_max;
-     else if (with_offset < sat_min) sat_val32 = sat_min;
-     else                            sat_val32 = with_offset;
-
-     // Shift left 2 bits for MSB-aligned 16-bit output
-     dac_word_from_sample = sat_val32 * 4;
- endfunction
-
-// Legacy wrapper: convert without amplitude/offset (full scale, zero offset).
-// Used by testbench unit tests that mirror DUT functions.
-function automatic signed [15:0] dac_word_from_sample_legacy(
-    input signed [13:0] sample
-);
-    dac_word_from_sample_legacy = sat_to_signed_14(sample) * 4;
-endfunction
-
-// Step 2.4.3: Byte-lane merge helper for WSTRB-aware writes.
-// Merges new_value into old_value per byte-lane strobes in wstrb.
-// WSTRB[0] -> [7:0], WSTRB[1] -> [15:8], WSTRB[2] -> [23:16], WSTRB[3] -> [31:24].
-// WSTRB=4'b0000 leaves old_value unchanged.
-function automatic [31:0] apply_wstrb;
-    input [31:0] old_value;
-    input [31:0] new_value;
-    input [3:0]  wstrb;
-    begin
-        apply_wstrb[7:0]   = wstrb[0] ? new_value[7:0]   : old_value[7:0];
-        apply_wstrb[15:8]  = wstrb[1] ? new_value[15:8]  : old_value[15:8];
-        apply_wstrb[23:16] = wstrb[2] ? new_value[23:16] : old_value[23:16];
-        apply_wstrb[31:24] = wstrb[3] ? new_value[31:24] : old_value[31:24];
-    end
-endfunction
-
 module function_gen_to_dac_1_0 #
 (
     // AXI4-Lite slave bus parameters
@@ -176,6 +80,106 @@ module function_gen_to_dac_1_0 #
 
     // Phase accumulator width (must match lut_waveform_gen)
     localparam integer PHASE_WIDTH             = 32;
+
+    // Saturation helper: clamp a signed value to [-8192, +8191].
+    // Used when intermediate amplitude/offset math is wider than 14 bits.
+    function automatic signed [13:0] sat_to_signed_14(
+        input signed [31:0] v
+    );
+        reg signed [15:0] sat_max16;
+        reg signed [15:0] sat_min16;
+        begin
+            sat_max16 = 16'd8191;
+            sat_min16 = -16'd8192;
+            if      (v > sat_max16) sat_to_signed_14 = sat_max16[13:0];
+            else if (v < sat_min16) sat_to_signed_14 = sat_min16[13:0];
+            else                    sat_to_signed_14 = v[13:0];
+        end
+    endfunction
+
+    // Convert a signed 14-bit LUT sample to a signed 16-bit MSB-aligned RF-DAC word.
+    // Applies amplitude scaling (Q15 fixed-point, amplitude[15:0]) and signed 14-bit offset,
+    // saturates to [-8192, +8191], then shifts left by 2 bits.
+    // Amplitude: Q15 signed fixed-point, range [0, 0x7FFF] (0 = mute, 0x7FFF ~= 1.0 full scale).
+    // Offset: signed 14-bit value from cfg_dac_offset[13:0], range [-8192, +8191].
+    // Formula: scaled = (sample * amplitude) >>> 15 + offset; result = saturate(scaled) * 4;
+    function automatic signed [15:0] dac_word_from_sample(
+        input signed [13:0] sample,
+        input [15:0] amplitude,
+        input signed [13:0] offset
+    );
+        reg [13:0] sample_mag14;
+        reg sample_sign;
+        reg [31:0] scaled_mag;
+        reg signed [31:0] scaled_signed;
+        reg signed [31:0] offset_ext;
+        reg signed [31:0] with_offset;
+        reg signed [31:0] sat_val32;
+        reg signed [31:0] sat_max;
+        reg signed [31:0] sat_min;
+
+        begin
+            // Handle sign separately to avoid signed multiplication issues
+            sample_sign = sample[13];
+            if (sample_sign && sample !== 14'd8192) begin
+                sample_mag14 = -sample;
+            end else if (sample === 14'd8192) begin
+                sample_mag14 = 14'd8192; // |-8192| = 8192
+            end else begin
+                sample_mag14 = sample[13:0];
+            end
+
+            // Unsigned magnitude * amplitude, then / 32768 (with rounding)
+            scaled_mag = (sample_mag14 * amplitude + 16'd16384) >>> 15;
+
+            // Re-apply sign
+            if (sample_sign) begin
+                scaled_signed = -($signed(scaled_mag));
+            end else begin
+                scaled_signed = $signed(scaled_mag);
+            end
+
+            // Explicit sign-extension of offset
+            offset_ext = {{18{offset[13]}}, offset};
+
+            // Add offset
+            with_offset = scaled_signed + offset_ext;
+
+            // Saturate to [-8192, +8191]
+            sat_max = 32'd8191;
+            sat_min = -32'd8192;
+            if      (with_offset > sat_max) sat_val32 = sat_max;
+            else if (with_offset < sat_min) sat_val32 = sat_min;
+            else                            sat_val32 = with_offset;
+
+            // Shift left 2 bits for MSB-aligned 16-bit output
+            dac_word_from_sample = sat_val32 * 4;
+        end
+    endfunction
+
+    // Legacy wrapper: convert without amplitude/offset (full scale, zero offset).
+    // Used by testbench unit tests that mirror DUT functions.
+    function automatic signed [15:0] dac_word_from_sample_legacy(
+        input signed [13:0] sample
+    );
+        dac_word_from_sample_legacy = sat_to_signed_14(sample) * 4;
+    endfunction
+
+    // Step 2.4.3: Byte-lane merge helper for WSTRB-aware writes.
+    // Merges new_value into old_value per byte-lane strobes in wstrb.
+    // WSTRB[0] -> [7:0], WSTRB[1] -> [15:8], WSTRB[2] -> [23:16], WSTRB[3] -> [31:24].
+    // WSTRB=4'b0000 leaves old_value unchanged.
+    function automatic [31:0] apply_wstrb;
+        input [31:0] old_value;
+        input [31:0] new_value;
+        input [3:0]  wstrb;
+        begin
+            apply_wstrb[7:0]   = wstrb[0] ? new_value[7:0]   : old_value[7:0];
+            apply_wstrb[15:8]  = wstrb[1] ? new_value[15:8]  : old_value[15:8];
+            apply_wstrb[23:16] = wstrb[2] ? new_value[23:16] : old_value[23:16];
+            apply_wstrb[31:24] = wstrb[3] ? new_value[31:24] : old_value[31:24];
+        end
+    endfunction
 
   // Function generator control registers (AXI-domain shadow registers)
     //
