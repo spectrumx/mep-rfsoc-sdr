@@ -6,7 +6,7 @@
 `timescale 1ns/1ps
 
 module rfdc_dac0_axis_model #(
-    parameter integer TDATA_WIDTH = 160
+    parameter integer TDATA_WIDTH = 64
 ) (
     input  wire                  s_axis_aclk,
     input  wire                  s_axis_aresetn,
@@ -23,12 +23,6 @@ module rfdc_dac0_axis_model #(
     reg signed [15:0] word1;
     reg signed [15:0] word2;
     reg signed [15:0] word3;
-    reg signed [15:0] word4;
-    reg signed [15:0] word5;
-    reg signed [15:0] word6;
-    reg signed [15:0] word7;
-    reg signed [15:0] word8;
-    reg signed [15:0] word9;
 
     initial begin
         s_axis_tready = 1'b1;
@@ -57,26 +51,16 @@ module rfdc_dac0_axis_model #(
                 word1 = s_axis_tdata[31:16];
                 word2 = s_axis_tdata[47:32];
                 word3 = s_axis_tdata[63:48];
-                word4 = s_axis_tdata[79:64];
-                word5 = s_axis_tdata[95:80];
-                word6 = s_axis_tdata[111:96];
-                word7 = s_axis_tdata[127:112];
-                word8 = s_axis_tdata[143:128];
-                word9 = s_axis_tdata[159:144];
 
                 if (check_dc_mode) begin
-                    if (word0 !== expected_i_word || word2 !== expected_i_word ||
-                        word4 !== expected_i_word || word6 !== expected_i_word ||
-                        word8 !== expected_i_word) begin
-                        $display("FAIL: DC I words = %04h %04h %04h %04h %04h expected %04h",
-                                 word0, word2, word4, word6, word8, expected_i_word);
+                    if (word0 !== expected_i_word || word2 !== expected_i_word) begin
+                        $display("FAIL: DC I words = %04h %04h expected %04h",
+                                 word0, word2, expected_i_word);
                         failures <= failures + 1;
                     end
-                    if (word1 !== expected_q_word || word3 !== expected_q_word ||
-                        word5 !== expected_q_word || word7 !== expected_q_word ||
-                        word9 !== expected_q_word) begin
-                        $display("FAIL: DC Q words = %04h %04h %04h %04h %04h expected %04h",
-                                 word1, word3, word5, word7, word9, expected_q_word);
+                    if (word1 !== expected_q_word || word3 !== expected_q_word) begin
+                        $display("FAIL: DC Q words = %04h %04h expected %04h",
+                                 word1, word3, expected_q_word);
                         failures <= failures + 1;
                     end
                 end
@@ -90,7 +74,7 @@ endmodule
 module function_gen_to_dac_rfdc_connectivity_tb;
     parameter integer C_S00_AXI_DATA_WIDTH = 32;
     parameter integer C_S00_AXI_ADDR_WIDTH = 7;
-    parameter integer C_M00_AXIS_TDATA_WIDTH = 160;
+    parameter integer C_M00_AXIS_TDATA_WIDTH = 64;
 
     reg s00_axi_aclk;
     reg s00_axi_aresetn;
@@ -181,7 +165,7 @@ module function_gen_to_dac_rfdc_connectivity_tb;
 
     initial begin
         m00_axis_aclk = 1'b0;
-        forever #48.828125ns m00_axis_aclk = ~m00_axis_aclk;
+        forever #15.625ns m00_axis_aclk = ~m00_axis_aclk;
     end
 
     task automatic axi_write(
@@ -230,8 +214,8 @@ module function_gen_to_dac_rfdc_connectivity_tb;
         s00_axi_arvalid = 1'b0;
         s00_axi_rready = 1'b0;
 
-        if ($bits(m00_axis_tdata) != 160) begin
-            $display("FAIL: M00_AXIS TDATA width is %0d, expected 160", $bits(m00_axis_tdata));
+        if ($bits(m00_axis_tdata) != 64) begin
+            $display("FAIL: M00_AXIS TDATA width is %0d, expected 64", $bits(m00_axis_tdata));
             $fatal;
         end
         if ($bits(s00_axi_wstrb) != 4) begin
@@ -283,10 +267,10 @@ module function_gen_to_dac_rfdc_connectivity_tb;
 
         $display("RFDC DAC connectivity assumptions checked:");
         $display("  M00_AXIS width: %0d bits", $bits(m00_axis_tdata));
+        $display("  Beat layout: I0, Q0, I1, Q1");
         $display("  M00_AXIS ports modeled: tdata/tvalid/tready only");
-        $display("  AXIS clock period: 97.65625 ns (10.240 MHz)");
+        $display("  AXIS clock period: 31.25 ns (32 MHz)");
         $display("  AXI-Lite clock period: 6.4 ns (156.25 MHz)");
-        $display("  RFDC DAC interface name note: current MEP-SDR Tcl references rfdc/s0_axis_aclk and rfdc/s0_axis_aresetn; exact DAC 0 stream interface pin still needs Vivado drop-in confirmation.");
 
         if (test_failures != 0) begin
             $display("RFDC connectivity test FAILED with %0d failures", test_failures);

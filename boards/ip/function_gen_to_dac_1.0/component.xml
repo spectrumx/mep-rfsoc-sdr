@@ -87,7 +87,7 @@
       <spirit:parameters>
         <spirit:parameter><spirit:name>ASSOCIATED_BUSIF</spirit:name><spirit:value spirit:id="BUSIFPARAM_VALUE.M00_AXIS_CLK.ASSOCIATED_BUSIF">M00_AXIS</spirit:value></spirit:parameter>
         <spirit:parameter><spirit:name>ASSOCIATED_RESET</spirit:name><spirit:value spirit:id="BUSIFPARAM_VALUE.M00_AXIS_CLK.ASSOCIATED_RESET">m00_axis_aresetn</spirit:value></spirit:parameter>
-        <spirit:parameter><spirit:name>FREQ_HZ</spirit:name><spirit:value spirit:format="long" spirit:id="BUSIFPARAM_VALUE.M00_AXIS_CLK.FREQ_HZ">10240000</spirit:value></spirit:parameter>
+        <spirit:parameter><spirit:name>FREQ_HZ</spirit:name><spirit:value spirit:format="long" spirit:id="BUSIFPARAM_VALUE.M00_AXIS_CLK.FREQ_HZ">32000000</spirit:value></spirit:parameter>
       </spirit:parameters>
     </spirit:busInterface>
     <spirit:busInterface>
@@ -101,7 +101,7 @@
         <spirit:portMap><spirit:logicalPort><spirit:name>TREADY</spirit:name></spirit:logicalPort><spirit:physicalPort><spirit:name>m00_axis_tready</spirit:name></spirit:physicalPort></spirit:portMap>
       </spirit:portMaps>
       <spirit:parameters>
-        <spirit:parameter><spirit:name>TDATA_NUM_BYTES</spirit:name><spirit:value spirit:format="long" spirit:id="BUSIFPARAM_VALUE.M00_AXIS.TDATA_NUM_BYTES">20</spirit:value></spirit:parameter>
+        <spirit:parameter><spirit:name>TDATA_NUM_BYTES</spirit:name><spirit:value spirit:format="long" spirit:id="BUSIFPARAM_VALUE.M00_AXIS.TDATA_NUM_BYTES">8</spirit:value></spirit:parameter>
         <spirit:parameter><spirit:name>HAS_TREADY</spirit:name><spirit:value spirit:format="long" spirit:id="BUSIFPARAM_VALUE.M00_AXIS.HAS_TREADY">1</spirit:value></spirit:parameter>
         <spirit:parameter><spirit:name>HAS_TLAST</spirit:name><spirit:value spirit:format="long" spirit:id="BUSIFPARAM_VALUE.M00_AXIS.HAS_TLAST">0</spirit:value></spirit:parameter>
         <spirit:parameter><spirit:name>HAS_TKEEP</spirit:name><spirit:value spirit:format="long" spirit:id="BUSIFPARAM_VALUE.M00_AXIS.HAS_TKEEP">0</spirit:value></spirit:parameter>
@@ -180,13 +180,13 @@
       <spirit:port><spirit:name>m00_axis_aclk</spirit:name><spirit:wire><spirit:direction>in</spirit:direction></spirit:wire></spirit:port>
       <spirit:port><spirit:name>m00_axis_aresetn</spirit:name><spirit:wire><spirit:direction>in</spirit:direction></spirit:wire></spirit:port>
       <spirit:port><spirit:name>m00_axis_tvalid</spirit:name><spirit:wire><spirit:direction>out</spirit:direction></spirit:wire></spirit:port>
-      <spirit:port><spirit:name>m00_axis_tdata</spirit:name><spirit:wire><spirit:direction>out</spirit:direction><spirit:vector><spirit:left>159</spirit:left><spirit:right>0</spirit:right></spirit:vector></spirit:wire></spirit:port>
+      <spirit:port><spirit:name>m00_axis_tdata</spirit:name><spirit:wire><spirit:direction>out</spirit:direction><spirit:vector><spirit:left>63</spirit:left><spirit:right>0</spirit:right></spirit:vector></spirit:wire></spirit:port>
       <spirit:port><spirit:name>m00_axis_tready</spirit:name><spirit:wire><spirit:direction>in</spirit:direction></spirit:wire></spirit:port>
     </spirit:ports>
     <spirit:modelParameters>
       <spirit:modelParameter spirit:dataType="integer"><spirit:name>C_S00_AXI_DATA_WIDTH</spirit:name><spirit:displayName>C S00 AXI DATA WIDTH</spirit:displayName><spirit:value spirit:format="long" spirit:resolve="generated" spirit:id="MODELPARAM_VALUE.C_S00_AXI_DATA_WIDTH">32</spirit:value></spirit:modelParameter>
       <spirit:modelParameter spirit:dataType="integer"><spirit:name>C_S00_AXI_ADDR_WIDTH</spirit:name><spirit:displayName>C S00 AXI ADDR WIDTH</spirit:displayName><spirit:value spirit:format="long" spirit:resolve="generated" spirit:id="MODELPARAM_VALUE.C_S00_AXI_ADDR_WIDTH">7</spirit:value></spirit:modelParameter>
-      <spirit:modelParameter spirit:dataType="integer"><spirit:name>C_M00_AXIS_TDATA_WIDTH</spirit:name><spirit:displayName>C M00 AXIS TDATA WIDTH</spirit:displayName><spirit:value spirit:format="long" spirit:resolve="generated" spirit:id="MODELPARAM_VALUE.C_M00_AXIS_TDATA_WIDTH">160</spirit:value></spirit:modelParameter>
+      <spirit:modelParameter spirit:dataType="integer"><spirit:name>C_M00_AXIS_TDATA_WIDTH</spirit:name><spirit:displayName>C M00 AXIS TDATA WIDTH</spirit:displayName><spirit:value spirit:format="long" spirit:resolve="generated" spirit:id="MODELPARAM_VALUE.C_M00_AXIS_TDATA_WIDTH">64</spirit:value></spirit:modelParameter>
     </spirit:modelParameters>
   </spirit:model>
   <spirit:fileSets>
@@ -209,7 +209,7 @@
   <spirit:parameters>
     <spirit:parameter><spirit:name>C_S00_AXI_DATA_WIDTH</spirit:name><spirit:displayName>C S00 AXI DATA WIDTH</spirit:displayName><spirit:value spirit:format="long" spirit:resolve="user" spirit:id="PARAM_VALUE.C_S00_AXI_DATA_WIDTH" spirit:order="3">32</spirit:value></spirit:parameter>
     <spirit:parameter><spirit:name>C_S00_AXI_ADDR_WIDTH</spirit:name><spirit:displayName>C S00 AXI ADDR WIDTH</spirit:displayName><spirit:value spirit:format="long" spirit:resolve="user" spirit:id="PARAM_VALUE.C_S00_AXI_ADDR_WIDTH" spirit:order="4" spirit:minimum="7" spirit:maximum="7" spirit:rangeType="long">7</spirit:value></spirit:parameter>
-    <spirit:parameter><spirit:name>C_M00_AXIS_TDATA_WIDTH</spirit:name><spirit:displayName>C M00 AXIS TDATA WIDTH</spirit:displayName><spirit:value spirit:format="long" spirit:resolve="user" spirit:id="PARAM_VALUE.C_M00_AXIS_TDATA_WIDTH" spirit:order="5" spirit:minimum="160" spirit:maximum="160" spirit:rangeType="long">160</spirit:value></spirit:parameter>
+    <spirit:parameter><spirit:name>C_M00_AXIS_TDATA_WIDTH</spirit:name><spirit:displayName>C M00 AXIS TDATA WIDTH</spirit:displayName><spirit:value spirit:format="long" spirit:resolve="user" spirit:id="PARAM_VALUE.C_M00_AXIS_TDATA_WIDTH" spirit:order="5" spirit:minimum="64" spirit:maximum="64" spirit:rangeType="long">64</spirit:value></spirit:parameter>
     <spirit:parameter><spirit:name>C_S00_AXI_BASEADDR</spirit:name><spirit:displayName>C S00 AXI BASEADDR</spirit:displayName><spirit:value spirit:format="bitString" spirit:resolve="user" spirit:id="PARAM_VALUE.C_S00_AXI_BASEADDR" spirit:order="6" spirit:bitStringLength="32">0x00000000</spirit:value></spirit:parameter>
     <spirit:parameter><spirit:name>C_S00_AXI_HIGHADDR</spirit:name><spirit:displayName>C S00 AXI HIGHADDR</spirit:displayName><spirit:value spirit:format="bitString" spirit:resolve="user" spirit:id="PARAM_VALUE.C_S00_AXI_HIGHADDR" spirit:order="7" spirit:bitStringLength="32">0x00000FFF</spirit:value></spirit:parameter>
     <spirit:parameter><spirit:name>Component_Name</spirit:name><spirit:value spirit:resolve="user" spirit:id="PARAM_VALUE.Component_Name" spirit:order="1">function_gen_to_dac_v1_0</spirit:value></spirit:parameter>

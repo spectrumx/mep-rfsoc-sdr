@@ -13,8 +13,8 @@
 
 module lut_waveform_gen #
 (
-    // Logical sample rate (NCO clock) in Hz (default 51.2 MSPS = 51200000)
-    parameter integer CLOCK_FREQUENCY = 51200000,
+    // Logical sample rate (NCO clock) in Hz (default 64 MSPS = 64000000)
+    parameter integer CLOCK_FREQUENCY = 64000000,
 
     // Phase accumulator width (determines frequency resolution)
     parameter integer PHASE_WIDTH = 32,
@@ -26,7 +26,7 @@ module lut_waveform_gen #
     parameter integer LUT_ADDR_WIDTH = 12, // 4096 entries
 
     // Number of logical sample steps the phase accumulator advances per clock cycle.
-    // Default 1: one sample per clock. Set to 5 for 51.2 MSPS at 10.240 MHz AXIS clock.
+    // Default 1: one sample per clock. Set to 2 for 64 MSPS at 32 MHz AXIS clock.
     parameter integer SAMPLES_PER_CLOCK = 1
 )
 (
@@ -156,4 +156,3 @@ module lut_waveform_gen #
     end
 
 endmodule
-

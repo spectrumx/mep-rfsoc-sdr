@@ -9,7 +9,7 @@ proc init_gui { IPINST } {
 
   set_property tooltip "AXI4-Lite data width. Fixed at 32 bits." ${data_width}
   set_property tooltip "AXI4-Lite address width. Fixed at 7 bits by the HDL." ${addr_width}
-  set_property tooltip "RFDC DAC AXI4-Stream TDATA width. Fixed at 160 bits for 10 signed 16-bit words per beat." ${tdata_width}
+  set_property tooltip "RFDC DAC AXI4-Stream TDATA width. Fixed at 64 bits for 4 signed 16-bit words per beat." ${tdata_width}
 
   ipgui::add_param $IPINST -name "C_S00_AXI_BASEADDR" -parent ${page0}
   ipgui::add_param $IPINST -name "C_S00_AXI_HIGHADDR" -parent ${page0}
