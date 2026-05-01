@@ -34,6 +34,10 @@ ADC_SAMPLE_FREQUENCY = 1024  # MSps
 ADC_DECIMATION = 16
 ADC_IF = 1090  # MHz
 ALL_CHANNELS = ["A", "B", "C", "D"]
+TX_WAVEFORM_SINE_COS = 1
+TX_DEFAULT_AMPLITUDE = 0x7FFF
+TX_DEFAULT_PHASE = 0
+TX_DEFAULT_OFFSET = 0
 
 GREEN = "\033[92m"
 BLUE = "\033[94m"
@@ -107,6 +111,38 @@ def get_bitfile_path():
     raise FileNotFoundError(
         f"Could not find bitfile {BITFILE_NAME} in package or local directory"
     )
+
+
+def configure_tx_function_generator(tx_freq_mhz, data):
+    gen = getattr(data.ol, "function_gen_to_dac_0", None)
+    if gen is None:
+        if tx_freq_mhz is None:
+            logging.info("TX function generator IP not present; nothing to disable")
+            return
+        raise RuntimeError("Overlay does not expose function_gen_to_dac_0")
+
+    regs = gen.register_map
+    regs.ENABLE = 0
+
+    if tx_freq_mhz is None:
+        logging.info("TX function generator disabled")
+        return
+
+    tx_freq_hz = int(round(float(tx_freq_mhz) * 1e6))
+    if tx_freq_hz <= 0:
+        raise ValueError("--tx-freq must be greater than 0 MHz")
+    if tx_freq_hz >= 32_000_000:
+        logging.warning(
+            "Requested TX frequency is at or above Nyquist for the 64 MSPS logical DAC stream"
+        )
+
+    regs.WAVEFORM_TYPE = TX_WAVEFORM_SINE_COS
+    regs.FREQUENCY = tx_freq_hz
+    regs.AMPLITUDE = TX_DEFAULT_AMPLITUDE
+    regs.PHASE = TX_DEFAULT_PHASE
+    regs.OFFSET = TX_DEFAULT_OFFSET
+    regs.ENABLE = 1
+    logging.info("TX function generator enabled at %.6f MHz", tx_freq_hz / 1e6)
 
 
 def on_message(client, userdata, msg):
@@ -280,13 +316,16 @@ def run(args):
     # Wait for overlay to initialize
     time.sleep(5)
 
+    # Configure clock
+    data.ol.configure_clock("internal" if args.internal_clock else "external")
+
+    # Configure optional DAC0 TX tone. RX setup still proceeds normally.
+    configure_tx_function_generator(args.tx_freq, data)
+
     # Set active channels
     data.channels = ALL_CHANNELS
     set_channel_ctrl(Ctrl.RESET, data)
     data.channels = args.channels
-
-    # Configure clock
-    data.ol.configure_clock("internal" if args.internal_clock else "external")
 
     # Apply initial ADC config
     update_adc_nco(args.freq, data)
@@ -312,6 +351,10 @@ def run(args):
                 data.pps_count = pps
                 pps_count_last = pps
     finally:
+        try:
+            configure_tx_function_generator(None, data)
+        except Exception as e:
+            logging.warning("Failed to disable TX function generator: %s", e)
         mqtt_client.loop_stop()
 
     logging.info("Exiting and resetting channels.")
@@ -353,6 +396,12 @@ def main():
         "--internal_clock",
         action="store_true",
         help="Use internal clock instead of external ref",
+    )
+    parser.add_argument(
+        "--tx-freq",
+        type=float,
+        default=None,
+        help="Enable DAC0 function generator at this TX frequency in MHz",
     )
     parser.add_argument(
         "--log-level",
