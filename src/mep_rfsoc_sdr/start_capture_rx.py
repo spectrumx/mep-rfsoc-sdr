@@ -13,7 +13,11 @@ from enum import Enum
 
 import paho.mqtt.client as mqtt
 
-from .sdr_overlay import SDROverlay
+if __package__ in (None, ""):
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from sdr_overlay import SDROverlay
+else:
+    from .sdr_overlay import SDROverlay
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 BITFILE_NAME = "sdr_bitstream.bit"
