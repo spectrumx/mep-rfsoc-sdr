@@ -76,6 +76,13 @@ module function_gen_to_dac_rfdc_connectivity_tb;
     parameter integer C_S00_AXI_ADDR_WIDTH = 7;
     parameter integer C_M00_AXIS_TDATA_WIDTH = 64;
 
+    localparam [6:0] REG_WAVEFORM_TYPE = 7'h00;
+    localparam [6:0] REG_FREQUENCY     = 7'h04;
+    localparam [6:0] REG_AMPLITUDE     = 7'h08;
+    localparam [6:0] REG_PHASE         = 7'h0C;
+    localparam [6:0] REG_OFFSET        = 7'h10;
+    localparam [6:0] REG_ENABLE        = 7'h14;
+
     reg s00_axi_aclk;
     reg s00_axi_aresetn;
     reg [C_S00_AXI_ADDR_WIDTH-1:0] s00_axi_awaddr;
@@ -234,13 +241,12 @@ module function_gen_to_dac_rfdc_connectivity_tb;
             test_failures = test_failures + 1;
         end
 
-        // Current HDL register decode uses compact offsets 0x00..0x05.
-        axi_write(7'h00, 32'd2);          // DC I/Q mode
-        axi_write(7'h01, 32'd0);          // Frequency unused in DC mode
-        axi_write(7'h02, 32'h00007FFF);   // Full scale
-        axi_write(7'h03, 32'd0);          // Phase unused in DC mode
-        axi_write(7'h04, 32'd4096);       // I = +4096 << 2 = 0x4000
-        axi_write(7'h05, 32'd1);          // Enable
+        axi_write(REG_WAVEFORM_TYPE, 32'd2);          // DC I/Q mode
+        axi_write(REG_FREQUENCY, 32'd0);              // Frequency unused in DC mode
+        axi_write(REG_AMPLITUDE, 32'h00007FFF);       // Full scale
+        axi_write(REG_PHASE, 32'd0);                  // Phase unused in DC mode
+        axi_write(REG_OFFSET, 32'd4096);              // I = +4096 << 2 = 0x4000
+        axi_write(REG_ENABLE, 32'd1);                 // Enable
 
         check_dc_mode = 1'b1;
         while (rfdc_accepted_beats < 8 && wait_cycles < 200) begin
@@ -258,7 +264,7 @@ module function_gen_to_dac_rfdc_connectivity_tb;
             test_failures = test_failures + rfdc_failures;
         end
 
-        axi_write(7'h05, 32'd0);          // Disable
+        axi_write(REG_ENABLE, 32'd0);          // Disable
         repeat (4) @(posedge m00_axis_aclk);
         if (m00_axis_tvalid !== 1'b0) begin
             $display("FAIL: M00_AXIS TVALID remains asserted after disable");

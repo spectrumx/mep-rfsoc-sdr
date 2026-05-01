@@ -486,13 +486,20 @@ module function_gen_to_dac_1_0 #
     //
     // Register map (7-bit byte-addressable, little-endian):
     //   7'h00: waveform_type_shadow  - Waveform type selection
-    //   7'h01: frequency_shadow      - Output frequency in Hz
-    //   7'h02: amplitude_shadow      - Amplitude (Q15 fixed-point, [15:0])
-    //   7'h03: phase_shadow          - Phase offset (32-bit phase accumulator units)
-    //   7'h04: offset_shadow         - DC offset (signed 14-bit, [13:0])
-    //   7'h05: enable_shadow         - Streaming enable ([0])
+    //   7'h04: frequency_shadow      - Output frequency in Hz
+    //   7'h08: amplitude_shadow      - Amplitude (Q15 fixed-point, [15:0])
+    //   7'h0C: phase_shadow          - Phase offset (32-bit phase accumulator units)
+    //   7'h10: offset_shadow         - DC offset (signed 14-bit, [13:0])
+    //   7'h14: enable_shadow         - Streaming enable ([0])
     //   All other addresses: read as 32'h0000_0000, writes are ignored
     //
+    localparam [6:0] REG_WAVEFORM_TYPE = 7'h00;
+    localparam [6:0] REG_FREQUENCY     = 7'h04;
+    localparam [6:0] REG_AMPLITUDE     = 7'h08;
+    localparam [6:0] REG_PHASE         = 7'h0C;
+    localparam [6:0] REG_OFFSET        = 7'h10;
+    localparam [6:0] REG_ENABLE        = 7'h14;
+
     assign s00_axi_bresp   = 2'b00;
     assign s00_axi_rresp   = 2'b00;
 
@@ -518,12 +525,12 @@ module function_gen_to_dac_1_0 #
         next_enable        = enable_shadow;
         if (pending_aw && pending_w) begin
             case (pending_aw_addr[6:0])
-                7'h00: next_waveform_type = apply_wstrb(waveform_type_shadow, pending_w_data, pending_w_strb);
-                7'h01: next_frequency     = apply_wstrb(frequency_shadow,     pending_w_data, pending_w_strb);
-                7'h02: next_amplitude     = apply_wstrb(amplitude_shadow,     pending_w_data, pending_w_strb);
-                7'h03: next_phase         = apply_wstrb(phase_shadow,         pending_w_data, pending_w_strb);
-                7'h04: next_offset        = apply_wstrb(offset_shadow,        pending_w_data, pending_w_strb);
-                7'h05: next_enable        = apply_wstrb(enable_shadow,        pending_w_data, pending_w_strb);
+                REG_WAVEFORM_TYPE: next_waveform_type = apply_wstrb(waveform_type_shadow, pending_w_data, pending_w_strb);
+                REG_FREQUENCY:     next_frequency     = apply_wstrb(frequency_shadow,     pending_w_data, pending_w_strb);
+                REG_AMPLITUDE:     next_amplitude     = apply_wstrb(amplitude_shadow,     pending_w_data, pending_w_strb);
+                REG_PHASE:         next_phase         = apply_wstrb(phase_shadow,         pending_w_data, pending_w_strb);
+                REG_OFFSET:        next_offset        = apply_wstrb(offset_shadow,        pending_w_data, pending_w_strb);
+                REG_ENABLE:        next_enable        = apply_wstrb(enable_shadow,        pending_w_data, pending_w_strb);
                 default: ;
             endcase
         end
@@ -703,12 +710,12 @@ module function_gen_to_dac_1_0 #
             if (s00_axi_arvalid && s00_axi_arready) begin
                 araddr_latch <= s00_axi_araddr;
                 case (s00_axi_araddr[6:0])
-                  7'h00: s00_axi_rdata <= waveform_type_shadow;
-                  7'h01: s00_axi_rdata <= frequency_shadow;
-                  7'h02: s00_axi_rdata <= amplitude_shadow;
-                  7'h03: s00_axi_rdata <= phase_shadow;
-                  7'h04: s00_axi_rdata <= offset_shadow;
-                  7'h05: s00_axi_rdata <= enable_shadow;
+                  REG_WAVEFORM_TYPE: s00_axi_rdata <= waveform_type_shadow;
+                  REG_FREQUENCY:     s00_axi_rdata <= frequency_shadow;
+                  REG_AMPLITUDE:     s00_axi_rdata <= amplitude_shadow;
+                  REG_PHASE:         s00_axi_rdata <= phase_shadow;
+                  REG_OFFSET:        s00_axi_rdata <= offset_shadow;
+                  REG_ENABLE:        s00_axi_rdata <= enable_shadow;
                   default: s00_axi_rdata <= 32'h0;
                 endcase
             end

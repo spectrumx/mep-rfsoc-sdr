@@ -16,6 +16,14 @@ module function_gen_to_dac_tb;
     localparam integer WORDS_PER_BEAT          = 4;
     localparam integer COMPLEX_SAMPLES_PER_BEAT = 2;
 
+    // AXI4-Lite register offsets (byte offsets)
+    localparam [6:0] REG_WAVEFORM_TYPE = 7'h00;
+    localparam [6:0] REG_FREQUENCY     = 7'h04;
+    localparam [6:0] REG_AMPLITUDE     = 7'h08;
+    localparam [6:0] REG_PHASE         = 7'h0C;
+    localparam [6:0] REG_OFFSET        = 7'h10;
+    localparam [6:0] REG_ENABLE        = 7'h14;
+
     // AXI4-Lite signals
     reg s00_axi_aclk;
     reg s00_axi_aresetn;
@@ -540,17 +548,17 @@ module function_gen_to_dac_tb;
      // Configure DUT via AXI4-Lite
         $display("CONFIGURING REGISTERS:");
         $display("----------------------------------------");
-        write_register(7'h00, 32'h00000001);
+        write_register(REG_WAVEFORM_TYPE, 32'h00000001);
         $display("  Writing waveform_type = 1 (sine)");
-        write_register(7'h01, 32'd2000000);
+        write_register(REG_FREQUENCY, 32'd2000000);
         $display("  Writing frequency = 2000000 Hz");
-        write_register(7'h02, 32'h00007FFF);
+        write_register(REG_AMPLITUDE, 32'h00007FFF);
         $display("  Writing amplitude = 0x7FFF (full scale, Q15)");
-        write_register(7'h03, 32'd0);
+        write_register(REG_PHASE, 32'd0);
         $display("  Writing phase = 0");
-        write_register(7'h04, 32'd0);
+        write_register(REG_OFFSET, 32'd0);
         $display("  Writing offset = 0");
-        write_register(7'h05, 32'h00000001);
+        write_register(REG_ENABLE, 32'h00000001);
         $display("  Writing enable = 1");
 
         // Verify register readback
@@ -559,55 +567,55 @@ module function_gen_to_dac_tb;
 
         // Step 2.4.1: Register map and readback for all supported addresses
         // Register map:
-        //   7'h00: waveform_type_ctrl
-        //   7'h01: frequency_ctrl
-        //   7'h02: amplitude_ctrl
-        //   7'h03: phase_ctrl
-        //   7'h04: offset_ctrl
-        //   7'h05: enable_ctrl
+        //   REG_WAVEFORM_TYPE: waveform_type_ctrl
+        //   REG_FREQUENCY: frequency_ctrl
+        //   REG_AMPLITUDE: amplitude_ctrl
+        //   REG_PHASE: phase_ctrl
+        //   REG_OFFSET: offset_ctrl
+        //   REG_ENABLE: enable_ctrl
         //   All other addresses read as 32'h0000_0000
 
-        read_register(7'h00, rb_data);
+        read_register(REG_WAVEFORM_TYPE, rb_data);
         if (rb_data !== 32'h00000001) begin
             $display("  FAIL: waveform_type (0x00) = 0x%08h (expected 0x00000001)", rb_data);
             $fatal;
         end else
             $display("  PASS: waveform_type (0x00) = 0x%08h", rb_data);
 
-        read_register(7'h01, rb_data);
+        read_register(REG_FREQUENCY, rb_data);
         if (rb_data !== 32'd2000000) begin
-            $display("  FAIL: frequency (0x01) = 0x%08h (expected 0x%08h)", rb_data, 32'd2000000);
+            $display("  FAIL: frequency (0x04) = 0x%08h (expected 0x%08h)", rb_data, 32'd2000000);
             $fatal;
         end else
-            $display("  PASS: frequency (0x01) = 0x%08h", rb_data);
+            $display("  PASS: frequency (0x04) = 0x%08h", rb_data);
 
-        read_register(7'h02, rb_data);
+        read_register(REG_AMPLITUDE, rb_data);
         if (rb_data !== 32'h00007FFF) begin
-            $display("  FAIL: amplitude (0x02) = 0x%08h (expected 0x00007FFF)", rb_data);
+            $display("  FAIL: amplitude (0x08) = 0x%08h (expected 0x00007FFF)", rb_data);
             $fatal;
         end else
-            $display("  PASS: amplitude (0x02) = 0x%08h", rb_data);
+            $display("  PASS: amplitude (0x08) = 0x%08h", rb_data);
 
-        read_register(7'h03, rb_data);
+        read_register(REG_PHASE, rb_data);
         if (rb_data !== 32'd0) begin
-            $display("  FAIL: phase (0x03) = 0x%08h (expected 0x00000000)", rb_data);
+            $display("  FAIL: phase (0x0C) = 0x%08h (expected 0x00000000)", rb_data);
             $fatal;
         end else
-            $display("  PASS: phase (0x03) = 0x%08h", rb_data);
+            $display("  PASS: phase (0x0C) = 0x%08h", rb_data);
 
-        read_register(7'h04, rb_data);
+        read_register(REG_OFFSET, rb_data);
         if (rb_data !== 32'd0) begin
-            $display("  FAIL: offset (0x04) = 0x%08h (expected 0x00000000)", rb_data);
+            $display("  FAIL: offset (0x10) = 0x%08h (expected 0x00000000)", rb_data);
             $fatal;
         end else
-            $display("  PASS: offset (0x04) = 0x%08h", rb_data);
+            $display("  PASS: offset (0x10) = 0x%08h", rb_data);
 
-        read_register(7'h05, rb_data);
+        read_register(REG_ENABLE, rb_data);
         if (rb_data !== 32'h00000001) begin
-            $display("  FAIL: enable (0x05) = 0x%08h (expected 0x00000001)", rb_data);
+            $display("  FAIL: enable (0x14) = 0x%08h (expected 0x00000001)", rb_data);
             $fatal;
         end else
-            $display("  PASS: enable (0x05) = 0x%08h", rb_data);
+            $display("  PASS: enable (0x14) = 0x%08h", rb_data);
 
         // Invalid address read check
         read_register(7'h0F, rb_data);
@@ -616,6 +624,21 @@ module function_gen_to_dac_tb;
             $fatal;
         end else
             $display("  PASS: invalid address (0x0F) reads as 0x%08h", rb_data);
+
+        // Old compact frequency offset must not alias the word-aligned register.
+        write_register(REG_FREQUENCY, 32'd2000000);
+        write_register(7'h01, 32'd1234567);
+        read_register(REG_FREQUENCY, rb_data);
+        if (rb_data !== 32'd2000000) begin
+            $display("  FAIL: old compact offset 0x01 changed frequency to 0x%08h", rb_data);
+            $fatal;
+        end
+        read_register(7'h01, rb_data);
+        if (rb_data !== 32'h00000000) begin
+            $display("  FAIL: old compact offset 0x01 readback = 0x%08h (expected 0x00000000)", rb_data);
+            $fatal;
+        end else
+            $display("  PASS: old compact offset 0x01 is ignored and reads as 0x%08h", rb_data);
 
         $display("  PASS: All Step 2.4.1 register-map/readback tests passed");
 
@@ -627,9 +650,9 @@ module function_gen_to_dac_tb;
             aww_failures = 0;
 
             // Test 1: Same-cycle AW/W write
-            $display("  Test: same-cycle AW/W write to 0x01 (frequency)");
-            write_aw_before_w(7'h01, 32'd5000000);
-            read_register(7'h01, rb_data);
+            $display("  Test: same-cycle AW/W write to 0x04 (frequency)");
+            write_aw_before_w(REG_FREQUENCY, 32'd5000000);
+            read_register(REG_FREQUENCY, rb_data);
             if (rb_data !== 32'd5000000) begin
                 $display("    FAIL: same-cycle readback = 0x%08h (expected 0x%08h)", rb_data, 32'd5000000);
                 $fatal;
@@ -637,9 +660,9 @@ module function_gen_to_dac_tb;
                 $display("    PASS: same-cycle AW/W readback = 0x%08h", rb_data);
 
             // Test 2: AW one cycle before W
-            $display("  Test: AW-before-W write to 0x01 (frequency)");
-            write_aw_before_w(7'h01, 32'd8000000);
-            read_register(7'h01, rb_data);
+            $display("  Test: AW-before-W write to 0x04 (frequency)");
+            write_aw_before_w(REG_FREQUENCY, 32'd8000000);
+            read_register(REG_FREQUENCY, rb_data);
             if (rb_data !== 32'd8000000) begin
                 $display("    FAIL: AW-before-W readback = 0x%08h (expected 0x%08h)", rb_data, 32'd8000000);
                 $fatal;
@@ -647,9 +670,9 @@ module function_gen_to_dac_tb;
                 $display("    PASS: AW-before-W readback = 0x%08h", rb_data);
 
             // Test 3: W one cycle before AW
-            $display("  Test: W-before-AW write to 0x01 (frequency)");
-            write_w_before_aw(7'h01, 32'd1000000);
-            read_register(7'h01, rb_data);
+            $display("  Test: W-before-AW write to 0x04 (frequency)");
+            write_w_before_aw(REG_FREQUENCY, 32'd1000000);
+            read_register(REG_FREQUENCY, rb_data);
             if (rb_data !== 32'd1000000) begin
                 $display("    FAIL: W-before-AW readback = 0x%08h (expected 0x%08h)", rb_data, 32'd1000000);
                 $fatal;
@@ -657,20 +680,20 @@ module function_gen_to_dac_tb;
                 $display("    PASS: W-before-AW readback = 0x%08h", rb_data);
 
             // Test 4: Back-to-back writes with BVALID hold verification
-            $display("  Test: back-to-back writes (0x01 and 0x03) with BVALID hold");
-            write_back_to_back(7'h01, 32'd2000000, 7'h03, 32'd1000);
-            read_register(7'h01, rb_data);
+            $display("  Test: back-to-back writes (0x04 and 0x0C) with BVALID hold");
+            write_back_to_back(REG_FREQUENCY, 32'd2000000, REG_PHASE, 32'd1000);
+            read_register(REG_FREQUENCY, rb_data);
             if (rb_data !== 32'd2000000) begin
-                $display("    FAIL: back-to-back write1 (0x01) = 0x%08h (expected 0x%08h)", rb_data, 32'd2000000);
+                $display("    FAIL: back-to-back write1 (0x04) = 0x%08h (expected 0x%08h)", rb_data, 32'd2000000);
                 $fatal;
             end else
-                $display("    PASS: back-to-back write1 (0x01) = 0x%08h", rb_data);
-            read_register(7'h03, rb_data);
+                $display("    PASS: back-to-back write1 (0x04) = 0x%08h", rb_data);
+            read_register(REG_PHASE, rb_data);
             if (rb_data !== 32'd1000) begin
-                $display("    FAIL: back-to-back write2 (0x03) = 0x%08h (expected 0x%08h)", rb_data, 32'd1000);
+                $display("    FAIL: back-to-back write2 (0x0C) = 0x%08h (expected 0x%08h)", rb_data, 32'd1000);
                 $fatal;
             end else
-                $display("    PASS: back-to-back write2 (0x03) = 0x%08h", rb_data);
+                $display("    PASS: back-to-back write2 (0x0C) = 0x%08h", rb_data);
             $display("    PASS: BVALID held stable for 2 cycles while BREADY=0");
 
             $display("  PASS: All Step 2.4.2 AW/W write acceptance tests passed");
@@ -679,7 +702,7 @@ module function_gen_to_dac_tb;
         // Step 2.4.3: WSTRB byte-lane write tests
         // CRITICAL: streaming must be disabled during WSTRB tests so that
         // intermediate register values do not disturb the NCO/datapath state.
-        // Using phase_ctrl (0x03) as the test target to avoid changing NCO rate.
+        // Using phase_ctrl (0x0C) as the test target to avoid changing NCO rate.
         $display("\nSTEP 2.4.3 - WSTRB BYTE-LANE WRITES:");
         $display("----------------------------------------");
         begin
@@ -687,12 +710,12 @@ module function_gen_to_dac_tb;
             wstrb_failures = 0;
 
             // Disable streaming before any byte-lane tests
-            write_register(7'h05, 32'd0);
+            write_register(REG_ENABLE, 32'd0);
             repeat (5) @(posedge s00_axi_aclk);
 
             // Set known baseline on phase_ctrl with full-word write
-            write_register(7'h03, 32'h00000000);
-            read_register(7'h03, rb_data);
+            write_register(REG_PHASE, 32'h00000000);
+            read_register(REG_PHASE, rb_data);
             if (rb_data !== 32'h00000000) begin
                 $display("  FAIL: phase_ctrl baseline = 0x%08h (expected 0x00000000)", rb_data);
                 $fatal;
@@ -700,8 +723,8 @@ module function_gen_to_dac_tb;
 
             // Test 1: byte0 only (WSTRB=4'b0001)
             $display("  Test: byte0 write (WSTRB=4'b0001) to phase_ctrl");
-            write_register_wstrb(7'h03, 32'h11223344, 4'b0001);
-            read_register(7'h03, rb_data);
+            write_register_wstrb(REG_PHASE, 32'h11223344, 4'b0001);
+            read_register(REG_PHASE, rb_data);
             if (rb_data !== 32'h00000044) begin
                 $display("    FAIL: byte0 readback = 0x%08h (expected 0x00000044)", rb_data);
                 wstrb_failures = wstrb_failures + 1;
@@ -710,8 +733,8 @@ module function_gen_to_dac_tb;
 
             // Test 2: byte1 only (WSTRB=4'b0010)
             $display("  Test: byte1 write (WSTRB=4'b0010) to phase_ctrl");
-            write_register_wstrb(7'h03, 32'hAABBCCDD, 4'b0010);
-            read_register(7'h03, rb_data);
+            write_register_wstrb(REG_PHASE, 32'hAABBCCDD, 4'b0010);
+            read_register(REG_PHASE, rb_data);
             if (rb_data !== 32'h0000CC44) begin
                 $display("    FAIL: byte1 readback = 0x%08h (expected 0x0000CC44)", rb_data);
                 wstrb_failures = wstrb_failures + 1;
@@ -721,8 +744,8 @@ module function_gen_to_dac_tb;
             // Test 3: byte2 only (WSTRB=4'b0100)
             // Current: 0x0000CC44, write 0x12345678, byte2=0x34 -> 0x0034CC44
             $display("  Test: byte2 write (WSTRB=4'b0100) to phase_ctrl");
-            write_register_wstrb(7'h03, 32'h12345678, 4'b0100);
-            read_register(7'h03, rb_data);
+            write_register_wstrb(REG_PHASE, 32'h12345678, 4'b0100);
+            read_register(REG_PHASE, rb_data);
             if (rb_data !== 32'h0034CC44) begin
                 $display("    FAIL: byte2 readback = 0x%08h (expected 0x0034CC44)", rb_data);
                 wstrb_failures = wstrb_failures + 1;
@@ -732,8 +755,8 @@ module function_gen_to_dac_tb;
             // Test 4: byte3 only (WSTRB=4'b1000)
             // Current: 0x0034CC44, write 0xDEADBEEF, byte3=0xDE -> 0xDE34CC44
             $display("  Test: byte3 write (WSTRB=4'b1000) to phase_ctrl");
-            write_register_wstrb(7'h03, 32'hDEADBEEF, 4'b1000);
-            read_register(7'h03, rb_data);
+            write_register_wstrb(REG_PHASE, 32'hDEADBEEF, 4'b1000);
+            read_register(REG_PHASE, rb_data);
             if (rb_data !== 32'hDE34CC44) begin
                 $display("    FAIL: byte3 readback = 0x%08h (expected 0xDE34CC44)", rb_data);
                 wstrb_failures = wstrb_failures + 1;
@@ -743,8 +766,8 @@ module function_gen_to_dac_tb;
             // Test 5: Mixed-lane write (WSTRB=4'b1010) -- bytes 1 and 3
             // Current: 0xDE34CC44, write 0xAA55CC11, bytes 1&3 -> 0xAA34CC44
             $display("  Test: mixed-lane write (WSTRB=4'b1010) to phase_ctrl");
-            write_register_wstrb(7'h03, 32'hAA55CC11, 4'b1010);
-            read_register(7'h03, rb_data);
+            write_register_wstrb(REG_PHASE, 32'hAA55CC11, 4'b1010);
+            read_register(REG_PHASE, rb_data);
             if (rb_data !== 32'hAA34CC44) begin
                 $display("    FAIL: mixed-lane readback = 0x%08h (expected 0xAA34CC44)", rb_data);
                 wstrb_failures = wstrb_failures + 1;
@@ -753,8 +776,8 @@ module function_gen_to_dac_tb;
 
             // Test 6: No-op write (WSTRB=4'b0000) -- register unchanged
             $display("  Test: no-op write (WSTRB=4'b0000) to phase_ctrl");
-            write_register_wstrb(7'h03, 32'hFFFFFFFF, 4'b0000);
-            read_register(7'h03, rb_data);
+            write_register_wstrb(REG_PHASE, 32'hFFFFFFFF, 4'b0000);
+            read_register(REG_PHASE, rb_data);
             if (rb_data !== 32'hAA34CC44) begin
                 $display("    FAIL: no-op readback = 0x%08h (expected 0xAA34CC44 unchanged)", rb_data);
                 wstrb_failures = wstrb_failures + 1;
@@ -777,13 +800,20 @@ module function_gen_to_dac_tb;
             integer i;
             reg [31:0] expected_rdata;
             reg [31:0] first_rdata;
+            reg [6:0] reg_offsets [0:5];
             read_hard_failures = 0;
+            reg_offsets[0] = REG_WAVEFORM_TYPE;
+            reg_offsets[1] = REG_FREQUENCY;
+            reg_offsets[2] = REG_AMPLITUDE;
+            reg_offsets[3] = REG_PHASE;
+            reg_offsets[4] = REG_OFFSET;
+            reg_offsets[5] = REG_ENABLE;
 
             // Test 1: RREADY backpressure - RDATA/RVALID stable while !RREADY
             $display("  Test: RVALID/RDATA stable while RREADY=0 (3-cycle stall)");
             begin
                 reg [31:0] stall_rdata;
-                read_register_rready_stall(7'h01, stall_rdata, 3);
+                read_register_rready_stall(REG_FREQUENCY, stall_rdata, 3);
                 $display("    PASS: RVALID/RDATA stable for 3 cycles with RREADY=0, ARREADY blocked");
             end
 
@@ -792,8 +822,8 @@ module function_gen_to_dac_tb;
             begin
                 reg [31:0] expected_rdata2;
 
-                // Initiate read from frequency (0x01)
-                s00_axi_araddr = 7'h01;
+                // Initiate read from frequency (0x04)
+                s00_axi_araddr = REG_FREQUENCY;
                 s00_axi_arprot = 3'h0;
                 s00_axi_arvalid = 1;
                 s00_axi_rready = 0;
@@ -810,9 +840,9 @@ module function_gen_to_dac_tb;
                     $fatal;
                 end
 
-                // Change ARADDR to a different register (0x05) and re-assert ARVALID
+                // Change ARADDR to a different register (0x14) and re-assert ARVALID
                 // This should NOT overwrite the pending read response
-                s00_axi_araddr = 7'h05;
+                s00_axi_araddr = REG_ENABLE;
                 s00_axi_arvalid = 1;
                 repeat (3) @(posedge s00_axi_aclk);
 
@@ -843,7 +873,7 @@ module function_gen_to_dac_tb;
             $display("  Test: consecutive reads from all 6 registers with RREADY stall");
             for (i = 0; i < 6; i = i + 1) begin
                 reg [31:0] consec_rdata;
-                read_register_rready_stall(7'h00 + i, consec_rdata, 2);
+                read_register_rready_stall(reg_offsets[i], consec_rdata, 2);
             end
             $display("    PASS: All 6 registers read correctly with 2-cycle RREADY stall each");
 
@@ -860,7 +890,7 @@ module function_gen_to_dac_tb;
             $display("  Test: RVALID deasserts after RREADY handshake");
             begin
                 // Initiate read, don't accept RREADY immediately
-                s00_axi_araddr = 7'h00;
+                s00_axi_araddr = REG_WAVEFORM_TYPE;
                 s00_axi_arprot = 3'h0;
                 s00_axi_arvalid = 1;
                 s00_axi_rready = 0;
@@ -892,11 +922,11 @@ module function_gen_to_dac_tb;
         end
 
         // Restore datapath registers and restart stream for remaining tests
-        write_register(7'h01, 32'd2000000);
-        write_register(7'h02, 32'h00007FFF);
-        write_register(7'h03, 32'd0);
-        write_register(7'h04, 32'd0);
-        write_register(7'h05, 32'd1);
+        write_register(REG_FREQUENCY, 32'd2000000);
+        write_register(REG_AMPLITUDE, 32'h00007FFF);
+        write_register(REG_PHASE, 32'd0);
+        write_register(REG_OFFSET, 32'd0);
+        write_register(REG_ENABLE, 32'd1);
 
         // Wait for CDC round-trip and DUT startup (enable propagation + startup guard)
         // CDC: AXI->DAC synchronizer (~2 AXIS cycles) + DAC capture + DAC->AXI ack (~2 AXI cycles)
@@ -1223,8 +1253,8 @@ module function_gen_to_dac_tb;
 
             // Test 1: Half amplitude (0x3FFF), zero offset
             $display("  Test: amplitude=0x3FFF (half scale), offset=0");
-            write_register(7'h02, 32'h00003FFF);
-            write_register(7'h04, 32'd0);
+            write_register(REG_AMPLITUDE, 32'h00003FFF);
+            write_register(REG_OFFSET, 32'd0);
             // Wait for register change to propagate through pipeline
             repeat(10) @(posedge m00_axis_aclk);
             ao_beats = 0;
@@ -1249,8 +1279,8 @@ module function_gen_to_dac_tb;
 
             // Test 2: Full amplitude, positive offset +2048
             $display("  Test: amplitude=0x7FFF (full), offset=+2048");
-            write_register(7'h02, 32'h00007FFF);
-            write_register(7'h04, 32'd2048);
+            write_register(REG_AMPLITUDE, 32'h00007FFF);
+            write_register(REG_OFFSET, 32'd2048);
             repeat(10) @(posedge m00_axis_aclk);
             ao_beats = 0;
             ao_min = 16'h7FFF;
@@ -1279,8 +1309,8 @@ module function_gen_to_dac_tb;
 
             // Test 3: Full amplitude, negative offset -2048
             $display("  Test: amplitude=0x7FFF (full), offset=-2048");
-            write_register(7'h02, 32'h00007FFF);
-            write_register(7'h04, 32'h00003800);  // -2048: 16384-2048=14336=0x3800 in [13:0]
+            write_register(REG_AMPLITUDE, 32'h00007FFF);
+            write_register(REG_OFFSET, 32'h00003800);  // -2048: 16384-2048=14336=0x3800 in [13:0]
             repeat(10) @(posedge m00_axis_aclk);
             ao_beats = 0;
             ao_min = 16'h7FFF;
@@ -1309,8 +1339,8 @@ module function_gen_to_dac_tb;
 
             // Test 4: Zero amplitude (mute), offset +1024
             $display("  Test: amplitude=0 (mute), offset=+1024");
-            write_register(7'h02, 32'd0);
-            write_register(7'h04, 32'd1024);
+            write_register(REG_AMPLITUDE, 32'd0);
+            write_register(REG_OFFSET, 32'd1024);
             repeat(10) @(posedge m00_axis_aclk);
             ao_beats = 0;
             while (ao_beats < 20) begin
@@ -1330,8 +1360,8 @@ module function_gen_to_dac_tb;
                 $display("    PASS: mute+offset all words=0x1000 (offset*4=4096)");
 
             // Restore full scale, zero offset for remaining tests
-            write_register(7'h02, 32'h00007FFF);
-            write_register(7'h04, 32'd0);
+            write_register(REG_AMPLITUDE, 32'h00007FFF);
+            write_register(REG_OFFSET, 32'd0);
             repeat(10) @(posedge m00_axis_aclk);
 
             if (ao_failures > 0) begin
@@ -1399,7 +1429,7 @@ module function_gen_to_dac_tb;
 
             // Test 1: Dynamic frequency change while streaming
             $display("  Test 1: dynamic frequency change (2MHz -> 5MHz -> 2MHz)");
-            write_register(7'h01, 32'd5000000);
+            write_register(REG_FREQUENCY, 32'd5000000);
             repeat(10) @(posedge m00_axis_aclk);
             dyn_beats = 0;
             dyn_min = 16'h7FFF;
@@ -1426,7 +1456,7 @@ module function_gen_to_dac_tb;
                 end
             end
             // Restore frequency
-            write_register(7'h01, 32'd2000000);
+            write_register(REG_FREQUENCY, 32'd2000000);
             repeat(10) @(posedge m00_axis_aclk);
             if (dyn_xz > 0) begin
                 $display("    FAIL: %0d X/Z word(s) during frequency change", dyn_xz);
@@ -1444,7 +1474,7 @@ module function_gen_to_dac_tb;
 
             // Test 2: Dynamic amplitude change while streaming
             $display("  Test 2: dynamic amplitude change (full -> half -> full)");
-            write_register(7'h02, 32'h00003FFF);
+            write_register(REG_AMPLITUDE, 32'h00003FFF);
             repeat(10) @(posedge m00_axis_aclk);
             dyn_beats = 0;
             dyn_min = 16'h7FFF;
@@ -1471,7 +1501,7 @@ module function_gen_to_dac_tb;
                 end
             end
             // Restore amplitude
-            write_register(7'h02, 32'h00007FFF);
+            write_register(REG_AMPLITUDE, 32'h00007FFF);
             repeat(10) @(posedge m00_axis_aclk);
             if (dyn_xz > 0) begin
                 $display("    FAIL: %0d X/Z word(s) during amplitude change", dyn_xz);
@@ -1489,7 +1519,7 @@ module function_gen_to_dac_tb;
 
             // Test 3: Dynamic offset change while streaming
             $display("  Test 3: dynamic offset change (0 -> +4096 -> 0)");
-            write_register(7'h04, 32'd4096);
+            write_register(REG_OFFSET, 32'd4096);
             repeat(10) @(posedge m00_axis_aclk);
             dyn_beats = 0;
             dyn_min = 16'h7FFF;
@@ -1516,7 +1546,7 @@ module function_gen_to_dac_tb;
                 end
             end
             // Restore offset
-            write_register(7'h04, 32'd0);
+            write_register(REG_OFFSET, 32'd0);
             repeat(10) @(posedge m00_axis_aclk);
             if (dyn_xz > 0) begin
                 $display("    FAIL: %0d X/Z word(s) during offset change", dyn_xz);
@@ -1537,7 +1567,7 @@ module function_gen_to_dac_tb;
             // Test 4: Dynamic enable/disable while streaming
             $display("  Test 4: dynamic enable/disable");
             // Disable
-            write_register(7'h05, 32'd0);
+            write_register(REG_ENABLE, 32'd0);
             begin
                 integer disable_cycles;
                 disable_cycles = 0;
@@ -1553,7 +1583,7 @@ module function_gen_to_dac_tb;
             end
 
             // Re-enable
-            write_register(7'h05, 32'd1);
+            write_register(REG_ENABLE, 32'd1);
             begin
                 integer reenable_cycles;
                 reenable_cycles = 0;
@@ -1616,7 +1646,7 @@ module function_gen_to_dac_tb;
             cfg_failures = 0;
 
             // Disable streaming for clean bus-only testing
-            write_register(7'h05, 32'd0);
+            write_register(REG_ENABLE, 32'd0);
             repeat (5) @(posedge s00_axi_aclk);
 
             // Drain any pending publish state from prior AXI writes.
@@ -1639,11 +1669,11 @@ module function_gen_to_dac_tb;
 
             // Test 1: Single CDC round trip
             $display("  Test 1: single CDC round trip (frequency -> 3MHz)");
-            write_register(7'h01, 32'd3000000);
+            write_register(REG_FREQUENCY, 32'd3000000);
             @(posedge s00_axi_aclk);
 
             // Check AXI shadow readback
-            read_register(7'h01, rb_data);
+            read_register(REG_FREQUENCY, rb_data);
             if (rb_data !== 32'd3000000) begin
                 $display("    FAIL: AXI shadow readback = 0x%08h (expected 0x%08h)", rb_data, 32'd3000000);
                 cfg_failures = cfg_failures + 1;
@@ -1692,7 +1722,7 @@ module function_gen_to_dac_tb;
 
             // Test 2: Writes while request pending (dirty/coalescing with real CDC)
             $display("  Test 2: writes while pending (dirty/coalescing)");
-            write_register(7'h01, 32'd6000000);
+            write_register(REG_FREQUENCY, 32'd6000000);
             @(posedge s00_axi_aclk);
 
             // Verify first publish
@@ -1710,9 +1740,9 @@ module function_gen_to_dac_tb;
                 $display("    PASS: cfg_req_pending = 1 after first write");
 
             // Write additional controls while pending -> sets dirty
-            write_register(7'h02, 32'h00003FFF);
+            write_register(REG_AMPLITUDE, 32'h00003FFF);
             @(posedge s00_axi_aclk);
-            write_register(7'h03, 32'h10000000);
+            write_register(REG_PHASE, 32'h10000000);
             @(posedge s00_axi_aclk);
 
             if (uut.cfg_dirty !== 1'b1) begin
@@ -1795,7 +1825,7 @@ module function_gen_to_dac_tb;
 
                 for (cycle = 0; cycle < 3; cycle = cycle + 1) begin
                     $display("    Cycle %0d: frequency -> %0d Hz", cycle + 1, test_freqs[cycle]);
-                    write_register(7'h01, test_freqs[cycle]);
+                    write_register(REG_FREQUENCY, test_freqs[cycle]);
                     @(posedge s00_axi_aclk);
 
                     if (uut.cfg_req_pending !== 1'b1) begin
@@ -1840,12 +1870,12 @@ module function_gen_to_dac_tb;
             dp_failures = 0;
 
             // Enable streaming with known config
-            write_register(7'h00, 32'd1);  // waveform_type = sine
-            write_register(7'h01, 32'd2000000);  // frequency = 2 MHz
-            write_register(7'h02, 32'h7FFF);  // amplitude = full scale
-            write_register(7'h03, 32'd0);  // phase = 0
-            write_register(7'h04, 32'd0);  // offset = 0
-            write_register(7'h05, 32'd1);  // enable
+            write_register(REG_WAVEFORM_TYPE, 32'd1);  // waveform_type = sine
+            write_register(REG_FREQUENCY, 32'd2000000);  // frequency = 2 MHz
+            write_register(REG_AMPLITUDE, 32'h7FFF);  // amplitude = full scale
+            write_register(REG_PHASE, 32'd0);  // phase = 0
+            write_register(REG_OFFSET, 32'd0);  // offset = 0
+            write_register(REG_ENABLE, 32'd1);  // enable
 
             // Wait for CDC round-trip so cfg_dac_* are populated, then startup
             if (uut.cfg_req_pending) begin
@@ -1889,7 +1919,7 @@ module function_gen_to_dac_tb;
 
             // Test 1: Dynamic frequency change (2MHz -> 5MHz)
             $display("  Test 1: frequency change 2MHz -> 5MHz while streaming");
-            write_register(7'h01, 32'd5000000);
+            write_register(REG_FREQUENCY, 32'd5000000);
             @(posedge s00_axi_aclk);
 
             // Wait for CDC round-trip
@@ -1931,7 +1961,7 @@ module function_gen_to_dac_tb;
 
             // Test 2: Amplitude change (full -> half)
             $display("  Test 2: amplitude change full -> half while streaming");
-            write_register(7'h02, 32'h3FFF);
+            write_register(REG_AMPLITUDE, 32'h3FFF);
             @(posedge s00_axi_aclk);
             if (uut.cfg_req_pending) begin
                 wait_cfg_pending_clear(200);
@@ -1947,7 +1977,7 @@ module function_gen_to_dac_tb;
 
             // Test 3: Offset change (0 -> +2048)
             $display("  Test 3: offset change 0 -> +2048 while streaming");
-            write_register(7'h04, 32'd2048);
+            write_register(REG_OFFSET, 32'd2048);
             @(posedge s00_axi_aclk);
             if (uut.cfg_req_pending) begin
                 wait_cfg_pending_clear(200);
@@ -1963,7 +1993,7 @@ module function_gen_to_dac_tb;
 
             // Test 4: Disable/re-enable
             $display("  Test 4: disable/re-enable with CDC");
-            write_register(7'h05, 32'd0);
+            write_register(REG_ENABLE, 32'd0);
             @(posedge s00_axi_aclk);
             if (uut.cfg_req_pending) begin
                 wait_cfg_pending_clear(200);
@@ -1976,7 +2006,7 @@ module function_gen_to_dac_tb;
             end else
                 $display("    PASS: tvalid deasserted after disable");
 
-            write_register(7'h05, 32'd1);
+            write_register(REG_ENABLE, 32'd1);
             @(posedge s00_axi_aclk);
             if (uut.cfg_req_pending) begin
                 wait_cfg_pending_clear(200);
@@ -2042,11 +2072,11 @@ module function_gen_to_dac_tb;
             // --- Test 1: Disable stops tvalid ---
             $display("  Test 1: disable stops tvalid");
             // Ensure streaming is active
-            write_register(7'h01, 32'd2000000);
-            write_register(7'h02, 32'h7FFF);
-            write_register(7'h03, 32'd0);
-            write_register(7'h04, 32'd0);
-            write_register(7'h05, 32'd1);
+            write_register(REG_FREQUENCY, 32'd2000000);
+            write_register(REG_AMPLITUDE, 32'h7FFF);
+            write_register(REG_PHASE, 32'd0);
+            write_register(REG_OFFSET, 32'd0);
+            write_register(REG_ENABLE, 32'd1);
             if (uut.cfg_req_pending) begin
                 wait_cfg_pending_clear(200);
                 if (uut.cfg_req_pending) begin
@@ -2063,7 +2093,7 @@ module function_gen_to_dac_tb;
                 $display("    PASS: streaming confirmed active");
 
                 // Disable
-                write_register(7'h05, 32'd0);
+                write_register(REG_ENABLE, 32'd0);
                 if (uut.cfg_req_pending) begin
                     wait_cfg_pending_clear(200);
                 end
@@ -2080,10 +2110,10 @@ module function_gen_to_dac_tb;
             // --- Test 2: Re-enable with deterministic phase (90 degrees) ---
             $display("  Test 2: re-enable with phase=90deg produces expected quadrant");
             // Set frequency=0 for deterministic output, phase=90 degrees
-            write_register(7'h01, 32'd0);
-            write_register(7'h03, 32'h40000000);
+            write_register(REG_FREQUENCY, 32'd0);
+            write_register(REG_PHASE, 32'h40000000);
             // Re-enable
-            write_register(7'h05, 32'd1);
+            write_register(REG_ENABLE, 32'd1);
 
             // Wait for CDC round-trip for all writes (may need multiple round-trips due to dirty)
             if (uut.cfg_req_pending) begin
@@ -2157,14 +2187,14 @@ module function_gen_to_dac_tb;
             // --- Test 3: Phase=0 deg verification ---
             $display("  Test 3: re-enable with phase=0deg produces expected quadrant");
             // Disable, change phase to 0, re-enable
-            write_register(7'h05, 32'd0);
+            write_register(REG_ENABLE, 32'd0);
             if (uut.cfg_req_pending) begin
                 wait_cfg_pending_clear(200);
             end
             repeat (10) @(posedge m00_axis_aclk);
 
-            write_register(7'h03, 32'd0);
-            write_register(7'h05, 32'd1);
+            write_register(REG_PHASE, 32'd0);
+            write_register(REG_ENABLE, 32'd1);
             if (uut.cfg_req_pending) begin
                 wait_cfg_pending_clear(200);
                 if (uut.cfg_req_pending) begin
@@ -2217,9 +2247,9 @@ module function_gen_to_dac_tb;
             // --- Test 4: Phase change while streaming ---
             $display("  Test 4: phase change while streaming produces no X/Z or out-of-range");
             // Re-enable with 2 MHz tone
-            write_register(7'h01, 32'd2000000);
-            write_register(7'h03, 32'd0);
-            write_register(7'h05, 32'd1);
+            write_register(REG_FREQUENCY, 32'd2000000);
+            write_register(REG_PHASE, 32'd0);
+            write_register(REG_ENABLE, 32'd1);
             if (uut.cfg_req_pending) begin
                 wait_cfg_pending_clear(200);
                 if (uut.cfg_req_pending) begin
@@ -2256,7 +2286,7 @@ module function_gen_to_dac_tb;
                 end
 
                 // Change phase to 180 degrees while streaming
-                write_register(7'h03, 32'h80000000);
+                write_register(REG_PHASE, 32'h80000000);
                 // Wait for CDC transfer
                 if (uut.cfg_req_pending) begin
                     wait_cfg_pending_clear(200);
@@ -2310,11 +2340,11 @@ module function_gen_to_dac_tb;
             $display("  Test: reset after AW but before W");
             begin
                 // Disable streaming to keep AXIS side quiet
-                write_register(7'h05, 32'd0);
+                write_register(REG_ENABLE, 32'd0);
                 repeat (3) @(posedge s00_axi_aclk);
 
                 // Drive AW and let it be accepted
-                s00_axi_awaddr = 7'h01;
+                s00_axi_awaddr = REG_FREQUENCY;
                 s00_axi_awprot = 3'h0;
                 s00_axi_awvalid = 1;
                 s00_axi_wvalid  = 0;
@@ -2348,8 +2378,8 @@ module function_gen_to_dac_tb;
                 end
 
                 // Verify bus can perform a normal write/read
-                write_register(7'h01, 32'd2000000);
-                read_register(7'h01, rb_data);
+                write_register(REG_FREQUENCY, 32'd2000000);
+                read_register(REG_FREQUENCY, rb_data);
                 if (rb_data !== 32'd2000000) begin
                     $display("    FAIL: post-reset write/read mismatch = 0x%08h (expected 0x%08h)", rb_data, 32'd2000000);
                     rst_failures = rst_failures + 1;
@@ -2361,7 +2391,7 @@ module function_gen_to_dac_tb;
             // Drive W first, let it be accepted, then reset before AW arrives.
             $display("  Test: reset after W but before AW");
             begin
-                write_register(7'h05, 32'd0);
+                write_register(REG_ENABLE, 32'd0);
                 repeat (3) @(posedge s00_axi_aclk);
 
                 // Drive W and let it be accepted
@@ -2396,8 +2426,8 @@ module function_gen_to_dac_tb;
                 end
 
                 // Verify bus can perform a normal write/read
-                write_register(7'h01, 32'd2000000);
-                read_register(7'h01, rb_data);
+                write_register(REG_FREQUENCY, 32'd2000000);
+                read_register(REG_FREQUENCY, rb_data);
                 if (rb_data !== 32'd2000000) begin
                     $display("    FAIL: post-reset write/read mismatch = 0x%08h (expected 0x%08h)", rb_data, 32'd2000000);
                     rst_failures = rst_failures + 1;
@@ -2409,11 +2439,11 @@ module function_gen_to_dac_tb;
             // Complete a write so BVALID asserts, hold BREADY=0, then reset.
             $display("  Test: reset while BVALID=1 && BREADY=0");
             begin
-                write_register(7'h05, 32'd0);
+                write_register(REG_ENABLE, 32'd0);
                 repeat (3) @(posedge s00_axi_aclk);
 
                 // Initiate write, hold BREADY=0
-                s00_axi_awaddr = 7'h03;
+                s00_axi_awaddr = REG_PHASE;
                 s00_axi_awprot = 3'h0;
                 s00_axi_awvalid = 1;
                 s00_axi_wdata   = 32'h12345678;
@@ -2453,7 +2483,7 @@ module function_gen_to_dac_tb;
                 end
 
                 // Verify register was NOT written (reset prevented commit)
-                read_register(7'h03, rb_data);
+                read_register(REG_PHASE, rb_data);
                 // phase_ctrl was last set to 0 by earlier restoration; reset should clear to 0
                 if (rb_data !== 32'd0) begin
                     $display("    FAIL: register not cleared after reset during BVALID = 0x%08h", rb_data);
@@ -2461,9 +2491,9 @@ module function_gen_to_dac_tb;
                 end
 
                 // Verify bus can perform a normal write/read
-                write_register(7'h03, 32'd0);
-                write_register(7'h01, 32'd2000000);
-                read_register(7'h01, rb_data);
+                write_register(REG_PHASE, 32'd0);
+                write_register(REG_FREQUENCY, 32'd2000000);
+                read_register(REG_FREQUENCY, rb_data);
                 if (rb_data !== 32'd2000000) begin
                     $display("    FAIL: post-reset write/read mismatch = 0x%08h", rb_data);
                     rst_failures = rst_failures + 1;
@@ -2475,11 +2505,11 @@ module function_gen_to_dac_tb;
             // Initiate a read, let RVALID assert, hold RREADY=0, then reset.
             $display("  Test: reset while RVALID=1 && RREADY=0");
             begin
-                write_register(7'h05, 32'd0);
+                write_register(REG_ENABLE, 32'd0);
                 repeat (3) @(posedge s00_axi_aclk);
 
                 // Initiate read, hold RREADY=0
-                s00_axi_araddr = 7'h01;
+                s00_axi_araddr = REG_FREQUENCY;
                 s00_axi_arprot = 3'h0;
                 s00_axi_arvalid = 1;
                 s00_axi_rready  = 0;
@@ -2514,8 +2544,8 @@ module function_gen_to_dac_tb;
                 end
 
                 // Verify bus can perform a normal write/read
-                write_register(7'h01, 32'd2000000);
-                read_register(7'h01, rb_data);
+                write_register(REG_FREQUENCY, 32'd2000000);
+                read_register(REG_FREQUENCY, rb_data);
                 if (rb_data !== 32'd2000000) begin
                     $display("    FAIL: post-reset write/read mismatch = 0x%08h", rb_data);
                     rst_failures = rst_failures + 1;
@@ -2532,12 +2562,12 @@ module function_gen_to_dac_tb;
 
         // Step 2.6: Hardware bring-up modes
         // Re-enable streaming for mode tests
-        write_register(7'h00, 32'd1);  // waveform_type=1 (sine)
-        write_register(7'h01, 32'd2000000);
-        write_register(7'h02, 32'h00007FFF);
-        write_register(7'h03, 32'd0);
-        write_register(7'h04, 32'd0);
-        write_register(7'h05, 32'd1);
+        write_register(REG_WAVEFORM_TYPE, 32'd1);  // waveform_type=1 (sine)
+        write_register(REG_FREQUENCY, 32'd2000000);
+        write_register(REG_AMPLITUDE, 32'h00007FFF);
+        write_register(REG_PHASE, 32'd0);
+        write_register(REG_OFFSET, 32'd0);
+        write_register(REG_ENABLE, 32'd1);
         if (uut.cfg_req_pending) begin
             wait_cfg_pending_clear(200);
             if (uut.cfg_req_pending) begin
@@ -2581,7 +2611,7 @@ module function_gen_to_dac_tb;
 
             // Unsupported waveform type (value 5) should produce zero output
             $display("  Test: unsupported waveform_type=5 produces zero output");
-            write_register(7'h00, 32'd5);
+            write_register(REG_WAVEFORM_TYPE, 32'd5);
             if (uut.cfg_req_pending) begin
                 wait_cfg_pending_clear(200);
             end
@@ -2641,7 +2671,7 @@ module function_gen_to_dac_tb;
 
             // Also test waveform_type=0 (explicit zero mode)
             $display("  Test: waveform_type=0 produces zero output");
-            write_register(7'h00, 32'd0);
+            write_register(REG_WAVEFORM_TYPE, 32'd0);
             if (uut.cfg_req_pending) begin
                 wait_cfg_pending_clear(200);
             end
@@ -2662,7 +2692,7 @@ module function_gen_to_dac_tb;
             end
 
             // Restore sine mode for remaining tests
-            write_register(7'h00, 32'd1);
+            write_register(REG_WAVEFORM_TYPE, 32'd1);
             if (uut.cfg_req_pending) begin
                 wait_cfg_pending_clear(200);
             end
@@ -2684,8 +2714,8 @@ module function_gen_to_dac_tb;
 
             // Test 1: offset=+4096, expect I=0x4000, Q=0x0000
             $display("  Test: DC mode, offset=+4096 -> I=0x4000, Q=0x0000");
-            write_register(7'h00, 32'd2);
-            write_register(7'h04, 32'd4096);
+            write_register(REG_WAVEFORM_TYPE, 32'd2);
+            write_register(REG_OFFSET, 32'd4096);
             if (uut.cfg_req_pending) begin
                 wait_cfg_pending_clear(200);
                 if (uut.cfg_req_pending) begin
@@ -2729,7 +2759,7 @@ module function_gen_to_dac_tb;
 
             // Test 2: offset=-4096 (14-bit two's complement: 0x3000), expect I=0xC000, Q=0x0000
             $display("  Test: DC mode, offset=-4096 -> I=0xC000, Q=0x0000");
-            write_register(7'h04, 32'h00003000);
+            write_register(REG_OFFSET, 32'h00003000);
             if (uut.cfg_req_pending) begin
                 wait_cfg_pending_clear(200);
             end
@@ -2770,7 +2800,7 @@ module function_gen_to_dac_tb;
 
            // Test 3: Positive boundary - offset=+8191 (max 14-bit: 0x1FFF), expect I=0x7FFC
             $display("  Test: DC mode, positive boundary offset=+8191 -> I=0x7FFC");
-            write_register(7'h04, 32'h00001FFF);
+            write_register(REG_OFFSET, 32'h00001FFF);
             if (uut.cfg_req_pending) begin
                 wait_cfg_pending_clear(200);
             end
@@ -2800,7 +2830,7 @@ module function_gen_to_dac_tb;
 
             // Test 4: Negative boundary - offset=-8192 (min 14-bit: 0x2000), expect I=0x8000
             $display("  Test: DC mode, negative boundary offset=-8192 -> I=0x8000");
-            write_register(7'h04, 32'h00002000);
+            write_register(REG_OFFSET, 32'h00002000);
             if (uut.cfg_req_pending) begin
                 wait_cfg_pending_clear(200);
             end
@@ -2829,7 +2859,7 @@ module function_gen_to_dac_tb;
             end
 
             // Restore offset=0
-            write_register(7'h04, 32'd0);
+            write_register(REG_OFFSET, 32'd0);
             if (uut.cfg_req_pending) begin
                 wait_cfg_pending_clear(200);
             end
@@ -2850,8 +2880,8 @@ module function_gen_to_dac_tb;
             switch_failures = 0;
 
             // Ensure sine mode is active
-            write_register(7'h00, 32'd1);
-            write_register(7'h04, 32'd0);
+            write_register(REG_WAVEFORM_TYPE, 32'd1);
+            write_register(REG_OFFSET, 32'd0);
             if (uut.cfg_req_pending) begin
                 wait_cfg_pending_clear(200);
             end
@@ -2886,8 +2916,8 @@ module function_gen_to_dac_tb;
 
             // Switch to DC mode: offset=+2048 -> I=0x2000, Q=0x0000
             $display("  Test: switch sine -> DC mode (offset=+2048)");
-            write_register(7'h00, 32'd2);
-            write_register(7'h04, 32'd2048);
+            write_register(REG_WAVEFORM_TYPE, 32'd2);
+            write_register(REG_OFFSET, 32'd2048);
             if (uut.cfg_req_pending) begin
                 wait_cfg_pending_clear(200);
                 if (uut.cfg_req_pending) begin
@@ -2937,8 +2967,8 @@ module function_gen_to_dac_tb;
 
             // Switch back to sine mode
             $display("  Test: switch DC -> sine mode");
-            write_register(7'h00, 32'd1);
-            write_register(7'h04, 32'd0);
+            write_register(REG_WAVEFORM_TYPE, 32'd1);
+            write_register(REG_OFFSET, 32'd0);
             if (uut.cfg_req_pending) begin
                 wait_cfg_pending_clear(200);
                 if (uut.cfg_req_pending) begin

@@ -122,11 +122,11 @@
         <spirit:usage>register</spirit:usage>
         <spirit:access>read-write</spirit:access>
         <spirit:register><spirit:name>WAVEFORM_TYPE</spirit:name><spirit:displayName>WAVEFORM_TYPE</spirit:displayName><spirit:description>Waveform type: 0 zero, 1 sine/cosine, 2 DC I/Q</spirit:description><spirit:addressOffset>0</spirit:addressOffset><spirit:size spirit:format="long">32</spirit:size><spirit:access>read-write</spirit:access></spirit:register>
-        <spirit:register><spirit:name>FREQUENCY</spirit:name><spirit:displayName>FREQUENCY</spirit:displayName><spirit:description>Output frequency in Hz</spirit:description><spirit:addressOffset>1</spirit:addressOffset><spirit:size spirit:format="long">32</spirit:size><spirit:access>read-write</spirit:access></spirit:register>
-        <spirit:register><spirit:name>AMPLITUDE</spirit:name><spirit:displayName>AMPLITUDE</spirit:displayName><spirit:description>Amplitude Q15 scale; 0x7FFF is near full scale</spirit:description><spirit:addressOffset>2</spirit:addressOffset><spirit:size spirit:format="long">32</spirit:size><spirit:access>read-write</spirit:access></spirit:register>
-        <spirit:register><spirit:name>PHASE</spirit:name><spirit:displayName>PHASE</spirit:displayName><spirit:description>Phase offset in 32-bit phase accumulator units</spirit:description><spirit:addressOffset>3</spirit:addressOffset><spirit:size spirit:format="long">32</spirit:size><spirit:access>read-write</spirit:access></spirit:register>
-        <spirit:register><spirit:name>OFFSET</spirit:name><spirit:displayName>OFFSET</spirit:displayName><spirit:description>Signed 14-bit RF-DAC offset in bits [13:0]</spirit:description><spirit:addressOffset>4</spirit:addressOffset><spirit:size spirit:format="long">32</spirit:size><spirit:access>read-write</spirit:access></spirit:register>
-        <spirit:register><spirit:name>ENABLE</spirit:name><spirit:displayName>ENABLE</spirit:displayName><spirit:description>Bit 0 enables stream output</spirit:description><spirit:addressOffset>5</spirit:addressOffset><spirit:size spirit:format="long">32</spirit:size><spirit:access>read-write</spirit:access></spirit:register>
+        <spirit:register><spirit:name>FREQUENCY</spirit:name><spirit:displayName>FREQUENCY</spirit:displayName><spirit:description>Output frequency in Hz</spirit:description><spirit:addressOffset>4</spirit:addressOffset><spirit:size spirit:format="long">32</spirit:size><spirit:access>read-write</spirit:access></spirit:register>
+        <spirit:register><spirit:name>AMPLITUDE</spirit:name><spirit:displayName>AMPLITUDE</spirit:displayName><spirit:description>Amplitude Q15 scale; 0x7FFF is near full scale</spirit:description><spirit:addressOffset>8</spirit:addressOffset><spirit:size spirit:format="long">32</spirit:size><spirit:access>read-write</spirit:access></spirit:register>
+        <spirit:register><spirit:name>PHASE</spirit:name><spirit:displayName>PHASE</spirit:displayName><spirit:description>Phase offset in 32-bit phase accumulator units</spirit:description><spirit:addressOffset>12</spirit:addressOffset><spirit:size spirit:format="long">32</spirit:size><spirit:access>read-write</spirit:access></spirit:register>
+        <spirit:register><spirit:name>OFFSET</spirit:name><spirit:displayName>OFFSET</spirit:displayName><spirit:description>Signed 14-bit RF-DAC offset in bits [13:0]</spirit:description><spirit:addressOffset>16</spirit:addressOffset><spirit:size spirit:format="long">32</spirit:size><spirit:access>read-write</spirit:access></spirit:register>
+        <spirit:register><spirit:name>ENABLE</spirit:name><spirit:displayName>ENABLE</spirit:displayName><spirit:description>Bit 0 enables stream output</spirit:description><spirit:addressOffset>20</spirit:addressOffset><spirit:size spirit:format="long">32</spirit:size><spirit:access>read-write</spirit:access></spirit:register>
       </spirit:addressBlock>
     </spirit:memoryMap>
   </spirit:memoryMaps>
@@ -218,12 +218,13 @@
     <xilinx:coreExtensions>
       <xilinx:supportedFamilies>
         <xilinx:family xilinx:lifeCycle="Pre-Production">zynquplus</xilinx:family>
-      </xilinx:supportedFamilies>
+        <xilinx:family xilinx:lifeCycle="Pre-Production">rfsoc</xilinx:family>
+       </xilinx:supportedFamilies>
       <xilinx:taxonomies>
         <xilinx:taxonomy>AXI_Peripheral</xilinx:taxonomy>
       </xilinx:taxonomies>
       <xilinx:displayName>function_gen_to_dac_v1.0</xilinx:displayName>
-      <xilinx:coreRevision>1</xilinx:coreRevision>
+      <xilinx:coreRevision>2</xilinx:coreRevision>
     </xilinx:coreExtensions>
   </spirit:vendorExtensions>
 </spirit:component>
