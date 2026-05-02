@@ -31,11 +31,16 @@ LOG_DIR = os.path.join(os.sep, "var", "log", "spectrumx")
 LOCK_FILE = os.path.join(os.sep, "var", "lock", service_name + ".lock")
 
 ADC_SAMPLE_FREQUENCY = 1024  # MSps
+DAC_SAMPLE_FREQUENCY = 1024  # MSps
 ADC_DECIMATION = 16
 ADC_IF = 1090  # MHz
 ALL_CHANNELS = ["A", "B", "C", "D"]
 TX_WAVEFORM_SINE_COS = 1
-TX_DEFAULT_AMPLITUDE = 0x7FFF
+TX_BASEBAND_NYQUIST_MHZ = 32.0
+TX_DAC_TILE = 0
+TX_DAC_BLOCK = 0
+TX_MAX_AMPLITUDE_BINS = 8191
+TX_DEFAULT_AMPLITUDE_BINS = 8191
 TX_DEFAULT_PHASE = 0
 TX_DEFAULT_OFFSET = 0
 
@@ -113,10 +118,43 @@ def get_bitfile_path():
     )
 
 
-def configure_tx_function_generator(tx_freq_mhz, data):
+def resolve_tx_offset_mhz(args):
+    tx_requested = (
+        args.tx_center_freq is not None
+        or args.tx_offset_freq is not None
+        or args.tx_amplitude is not None
+    )
+    if not tx_requested:
+        return None
+
+    tx_offset_mhz = 0.0 if args.tx_offset_freq is None else float(args.tx_offset_freq)
+    if abs(tx_offset_mhz) >= TX_BASEBAND_NYQUIST_MHZ:
+        raise ValueError(
+            f"--tx-offset-freq magnitude must be less than "
+            f"{TX_BASEBAND_NYQUIST_MHZ:.1f} MHz"
+        )
+
+    return tx_offset_mhz
+
+
+def resolve_tx_amplitude_q15(args):
+    amplitude_bins = (
+        TX_DEFAULT_AMPLITUDE_BINS
+        if args.tx_amplitude is None
+        else int(args.tx_amplitude)
+    )
+    if amplitude_bins < 0 or amplitude_bins > TX_MAX_AMPLITUDE_BINS:
+        raise ValueError(
+            f"--tx-amplitude must be in DAC bins 0..{TX_MAX_AMPLITUDE_BINS}"
+        )
+
+    return int(round(amplitude_bins * 0x7FFF / TX_MAX_AMPLITUDE_BINS))
+
+
+def configure_tx_function_generator(tx_offset_mhz, tx_amplitude_q15, data):
     gen = getattr(data.ol, "function_gen_to_dac_0", None)
     if gen is None:
-        if tx_freq_mhz is None:
+        if tx_offset_mhz is None:
             logging.info("TX function generator IP not present; nothing to disable")
             return
         raise RuntimeError("Overlay does not expose function_gen_to_dac_0")
@@ -124,25 +162,44 @@ def configure_tx_function_generator(tx_freq_mhz, data):
     regs = gen.register_map
     regs.ENABLE = 0
 
-    if tx_freq_mhz is None:
+    if tx_offset_mhz is None:
         logging.info("TX function generator disabled")
         return
 
-    tx_freq_hz = int(round(float(tx_freq_mhz) * 1e6))
-    if tx_freq_hz <= 0:
-        raise ValueError("--tx-freq must be greater than 0 MHz")
-    if tx_freq_hz >= 32_000_000:
+    tx_offset_mhz = float(tx_offset_mhz)
+    tx_offset_hz = int(round(abs(tx_offset_mhz) * 1e6))
+    if tx_offset_mhz < 0:
         logging.warning(
-            "Requested TX frequency is at or above Nyquist for the 64 MSPS logical DAC stream"
+            "Negative TX offset requested; current function_gen_to_dac has no "
+            "sideband-direction register, so programming offset magnitude only"
         )
 
     regs.WAVEFORM_TYPE = TX_WAVEFORM_SINE_COS
-    regs.FREQUENCY = tx_freq_hz
-    regs.AMPLITUDE = TX_DEFAULT_AMPLITUDE
+    regs.FREQUENCY = tx_offset_hz
+    regs.AMPLITUDE = tx_amplitude_q15
     regs.PHASE = TX_DEFAULT_PHASE
     regs.OFFSET = TX_DEFAULT_OFFSET
     regs.ENABLE = 1
-    logging.info("TX function generator enabled at %.6f MHz", tx_freq_hz / 1e6)
+    logging.info(
+        "TX function generator enabled at signed offset %.6f MHz "
+        "(programmed magnitude %.6f MHz, amplitude Q15 0x%04X)",
+        tx_offset_mhz,
+        tx_offset_hz / 1e6,
+        tx_amplitude_q15,
+    )
+
+
+def configure_tx(args, data):
+    tx_offset_mhz = resolve_tx_offset_mhz(args)
+    tx_amplitude_q15 = resolve_tx_amplitude_q15(args)
+
+    if args.tx_center_freq is not None:
+        data.ol.set_dac_nco(
+            args.tx_center_freq, DAC_SAMPLE_FREQUENCY, TX_DAC_TILE, TX_DAC_BLOCK
+        )
+        logging.info("TX DAC center frequency set to %.6f MHz", args.tx_center_freq)
+
+    configure_tx_function_generator(tx_offset_mhz, tx_amplitude_q15, data)
 
 
 def on_message(client, userdata, msg):
@@ -320,7 +377,7 @@ def run(args):
     data.ol.configure_clock("internal" if args.internal_clock else "external")
 
     # Configure optional DAC0 TX tone. RX setup still proceeds normally.
-    configure_tx_function_generator(args.tx_freq, data)
+    configure_tx(args, data)
 
     # Set active channels
     data.channels = ALL_CHANNELS
@@ -352,7 +409,7 @@ def run(args):
                 pps_count_last = pps
     finally:
         try:
-            configure_tx_function_generator(None, data)
+            configure_tx_function_generator(None, None, data)
         except Exception as e:
             logging.warning("Failed to disable TX function generator: %s", e)
         mqtt_client.loop_stop()
@@ -398,10 +455,25 @@ def main():
         help="Use internal clock instead of external ref",
     )
     parser.add_argument(
-        "--tx-freq",
+        "--tx-center-freq",
         type=float,
         default=None,
-        help="Enable DAC0 function generator at this TX frequency in MHz",
+        help="Set DAC0 RFDC mixer/NCO center frequency in MHz",
+    )
+    parser.add_argument(
+        "--tx-offset-freq",
+        type=float,
+        default=None,
+        help=(
+            "DAC0 function-generator baseband offset frequency in MHz; "
+            "defaults to 0 when TX is otherwise requested"
+        ),
+    )
+    parser.add_argument(
+        "--tx-amplitude",
+        type=int,
+        default=None,
+        help="TX waveform peak amplitude in signed 14-bit DAC bins, 0..8191",
     )
     parser.add_argument(
         "--log-level",
