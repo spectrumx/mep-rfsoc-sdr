@@ -14,7 +14,7 @@
 //   - One beat emitted every AXIS clock cycle when enabled
 //
 // Implementation: 2 lut_waveform_gen instances, each advancing 2 phase steps
-// per clock (SAMPLES_PER_CLOCK=2), with phase_step_offset 0..1 to produce
+// per clock (SAMPLES_PER_CLOCK=2), with signed phase_step_offset 0..+/-1 to produce
 // 2 consecutive samples from one beat.
 //
 // Startup: a 2-cycle pipeline flush ensures the first accepted beat contains
@@ -260,17 +260,31 @@ module function_gen_to_dac_1_0 #
     reg [31:0] next_offset;
     reg [31:0] next_enable;
 
-    // Per-sample phase increment: freq * 2^PHASE_WIDTH / LOGICAL_SAMPLE_RATE
+    // FREQUENCY is interpreted as a signed two's-complement value in Hz.
+    // Raw register bits are preserved for AXI readback; sign/magnitude are
+    // derived only for phase-step sizing and direction.
+    wire signed [31:0] cfg_dac_frequency_signed;
+    wire cfg_dac_frequency_negative;
+    wire [31:0] cfg_dac_frequency_abs;
+    wire [63:0] cfg_dac_frequency_abs_64;
+
+    assign cfg_dac_frequency_signed = $signed(cfg_dac_frequency);
+    assign cfg_dac_frequency_negative = cfg_dac_frequency_signed < 0;
+    assign cfg_dac_frequency_abs = cfg_dac_frequency_negative ?
+        (~cfg_dac_frequency + 32'd1) : cfg_dac_frequency;
+    assign cfg_dac_frequency_abs_64 = {32'd0, cfg_dac_frequency_abs};
+
+    // Per-sample phase increment: abs(freq) * 2^PHASE_WIDTH / LOGICAL_SAMPLE_RATE
     wire [63:0] phase_inc_64;
     wire [31:0] phase_inc;
-    assign phase_inc_64 = (cfg_dac_frequency * (64'd1 << PHASE_WIDTH)) / LOGICAL_SAMPLE_RATE;
+    assign phase_inc_64 = (cfg_dac_frequency_abs_64 * (64'd1 << PHASE_WIDTH)) / LOGICAL_SAMPLE_RATE;
     assign phase_inc = phase_inc_64[PHASE_WIDTH-1:0];
 
     // Phase step offsets for samples 0..1
     wire [31:0] phase_step0;
     wire [31:0] phase_step1;
     assign phase_step0 = 32'd0;
-    assign phase_step1 = phase_inc;
+    assign phase_step1 = cfg_dac_frequency_negative ? -phase_inc : phase_inc;
 
     // Waveform generator outputs (signed 14-bit)
     wire signed [13:0] sine0;
@@ -292,7 +306,7 @@ module function_gen_to_dac_1_0 #
    ) u_wave0 (
         .clk(m00_axis_aclk),
           .rst_n(m00_axis_aresetn),
-          .frequency(cfg_dac_frequency),
+          .frequency(cfg_dac_frequency_signed),
           .phase_offset(cfg_dac_phase),
           .phase_step_offset(phase_step0),
           .en(cfg_dac_enable[0]),
@@ -311,7 +325,7 @@ module function_gen_to_dac_1_0 #
    ) u_wave1 (
       .clk(m00_axis_aclk),
           .rst_n(m00_axis_aresetn),
-          .frequency(cfg_dac_frequency),
+          .frequency(cfg_dac_frequency_signed),
           .phase_offset(cfg_dac_phase),
           .phase_step_offset(phase_step1),
           .en(cfg_dac_enable[0]),
@@ -486,7 +500,7 @@ module function_gen_to_dac_1_0 #
     //
     // Register map (7-bit byte-addressable, little-endian):
     //   7'h00: waveform_type_shadow  - Waveform type selection
-    //   7'h04: frequency_shadow      - Output frequency in Hz
+    //   7'h04: frequency_shadow      - Signed output frequency in Hz (two's complement)
     //   7'h08: amplitude_shadow      - Amplitude (Q15 fixed-point, [15:0])
     //   7'h0C: phase_shadow          - Phase offset (32-bit phase accumulator units)
     //   7'h10: offset_shadow         - DC offset (signed 14-bit, [13:0])

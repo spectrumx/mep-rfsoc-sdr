@@ -33,8 +33,8 @@ module lut_waveform_gen #
     input wire clk,
     input wire rst_n,
     
-    // Frequency control (32-bit unsigned integer, units: Hz)
-    input wire [31:0] frequency,
+    // Frequency control (32-bit signed two's-complement integer, units: Hz)
+    input wire signed [31:0] frequency,
     
     // Phase offset (32-bit, normalized to 2^PHASE_WIDTH)
     input wire [PHASE_WIDTH-1:0] phase_offset,
@@ -63,11 +63,18 @@ module lut_waveform_gen #
     // Phase increment calculation using fixed-point multiplication
     // phase_increment = (frequency * 2^PHASE_WIDTH) / CLOCK_FREQUENCY
     // Use 64-bit intermediate to avoid overflow
+    wire frequency_negative;
+    wire [31:0] frequency_abs;
+    wire [63:0] frequency_abs_64;
     wire [63:0] phase_increment_64;
     wire [PHASE_WIDTH-1:0] phase_increment;
+
+    assign frequency_negative = frequency < 0;
+    assign frequency_abs = frequency_negative ? (~frequency[31:0] + 32'd1) : frequency[31:0];
+    assign frequency_abs_64 = {32'd0, frequency_abs};
     
     // Calculate: frequency * SAMPLES_PER_CLOCK * 2^PHASE_WIDTH / CLOCK_FREQUENCY
-    assign phase_increment_64 = (frequency * SAMPLES_PER_CLOCK * (64'd1 << PHASE_WIDTH)) / CLOCK_FREQUENCY;
+    assign phase_increment_64 = (frequency_abs_64 * SAMPLES_PER_CLOCK * (64'd1 << PHASE_WIDTH)) / CLOCK_FREQUENCY;
     assign phase_increment = phase_increment_64[PHASE_WIDTH-1:0];
     
     // Phase accumulator update
@@ -78,6 +85,8 @@ module lut_waveform_gen #
             phase_accum <= {PHASE_WIDTH{1'b0}};
         end else if (!en) begin
             phase_accum <= {PHASE_WIDTH{1'b0}};
+        end else if (frequency_negative) begin
+            phase_accum <= phase_accum - phase_increment;
         end else begin
             phase_accum <= phase_accum + phase_increment;
         end

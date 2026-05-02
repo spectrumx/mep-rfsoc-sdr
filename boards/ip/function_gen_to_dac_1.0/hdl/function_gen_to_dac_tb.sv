@@ -921,6 +921,109 @@ module function_gen_to_dac_tb;
             $display("  PASS: All Step 2.4.4 read-hardening tests passed");
         end
 
+        // C1.6: Signed FREQUENCY register and phase-direction checks.
+        // Positive frequency must preserve existing direction; negative
+        // frequency must reverse the complex phase direction while preserving
+        // raw two's-complement AXI readback.
+        $display("\nC1.6 - SIGNED FREQUENCY DIRECTION:");
+        $display("----------------------------------------");
+        begin
+            reg signed [15:0] pos_i0;
+            reg signed [15:0] pos_i1;
+            reg signed [15:0] neg_i0;
+            reg signed [15:0] neg_i1;
+            integer signed_wait;
+
+            write_register(REG_ENABLE, 32'd0);
+            repeat (8) @(posedge m00_axis_aclk);
+
+            write_register(REG_WAVEFORM_TYPE, 32'd1);
+            write_register(REG_FREQUENCY, 32'd2000000);
+            write_register(REG_AMPLITUDE, 32'h00007FFF);
+            write_register(REG_PHASE, 32'd0);
+            write_register(REG_OFFSET, 32'd0);
+            write_register(REG_ENABLE, 32'd1);
+
+            signed_wait = 0;
+            while (!m00_axis_tvalid && signed_wait < 500) begin
+                @(posedge m00_axis_aclk);
+                signed_wait = signed_wait + 1;
+            end
+            if (signed_wait >= 500) begin
+                $display("  FAIL: positive signed-frequency test did not start streaming");
+                $fatal;
+            end
+            @(posedge m00_axis_aclk);
+            decode_beat(m00_axis_tdata);
+            if (beat_has_xz()) begin
+                $display("  FAIL: positive signed-frequency beat contains X/Z");
+                $fatal;
+            end
+            pos_i0 = dec_word0;
+            pos_i1 = dec_word2;
+            if (pos_i1 <= pos_i0) begin
+                $display("  FAIL: positive frequency did not advance I sample upward (I0=%0d I1=%0d)",
+                         pos_i0, pos_i1);
+                $fatal;
+            end
+
+            write_register(REG_ENABLE, 32'd0);
+            repeat (8) @(posedge m00_axis_aclk);
+            write_register(REG_FREQUENCY, 32'hFFE17B80); // -2,000,000 Hz
+            read_register(REG_FREQUENCY, rb_data);
+            if (rb_data !== 32'hFFE17B80) begin
+                $display("  FAIL: signed negative frequency readback = 0x%08h", rb_data);
+                $fatal;
+            end
+            write_register(REG_ENABLE, 32'd1);
+
+            signed_wait = 0;
+            while (!m00_axis_tvalid && signed_wait < 500) begin
+                @(posedge m00_axis_aclk);
+                signed_wait = signed_wait + 1;
+            end
+            if (signed_wait >= 500) begin
+                $display("  FAIL: negative signed-frequency test did not start streaming");
+                $fatal;
+            end
+            @(posedge m00_axis_aclk);
+            decode_beat(m00_axis_tdata);
+            if (beat_has_xz()) begin
+                $display("  FAIL: negative signed-frequency beat contains X/Z");
+                $fatal;
+            end
+            neg_i0 = dec_word0;
+            neg_i1 = dec_word2;
+            if (neg_i1 >= neg_i0) begin
+                $display("  FAIL: negative frequency did not advance I sample downward (I0=%0d I1=%0d)",
+                         neg_i0, neg_i1);
+                $fatal;
+            end
+
+            write_register(REG_ENABLE, 32'd0);
+            repeat (8) @(posedge m00_axis_aclk);
+            write_register(REG_FREQUENCY, 32'd0);
+            write_register(REG_ENABLE, 32'd1);
+            signed_wait = 0;
+            while (!m00_axis_tvalid && signed_wait < 500) begin
+                @(posedge m00_axis_aclk);
+                signed_wait = signed_wait + 1;
+            end
+            if (signed_wait >= 500) begin
+                $display("  FAIL: zero signed-frequency test did not start streaming");
+                $fatal;
+            end
+            @(posedge m00_axis_aclk);
+            decode_beat(m00_axis_tdata);
+            if (dec_word0 !== dec_word2 || dec_word1 !== dec_word3) begin
+                $display("  FAIL: zero frequency samples differ inside beat: I0=%0d Q0=%0d I1=%0d Q1=%0d",
+                         dec_word0, dec_word1, dec_word2, dec_word3);
+                $fatal;
+            end
+
+            $display("  PASS: signed frequency readback and direction checks");
+        end
+
         // Restore datapath registers and restart stream for remaining tests
         write_register(REG_FREQUENCY, 32'd2000000);
         write_register(REG_AMPLITUDE, 32'h00007FFF);

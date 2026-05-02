@@ -14,7 +14,7 @@ module lut_waveform_gen_tb;
     reg rst_n;
 
   // DUT input signals
-     reg [31:0] frequency;
+     reg signed [31:0] frequency;
      reg [PHASE_WIDTH-1:0] phase_offset;
      reg [PHASE_WIDTH-1:0] phase_step_offset;
      reg en;
@@ -199,6 +199,50 @@ module lut_waveform_gen_tb;
         ok = 1;
     endtask
 
+    task automatic run_signed_direction_test(output int ok);
+        integer pos_sine;
+        integer neg_sine;
+
+        phase_offset = 32'h0000_0000;
+        phase_step_offset = 32'h0000_0000;
+
+        frequency = 32'sd2000000;
+        rst_n = 0;
+        @(posedge clk);
+        @(posedge clk);
+        rst_n = 1;
+        @(posedge clk);
+        while (!valid_out) @(posedge clk);
+        repeat (5) @(posedge clk);
+        pos_sine = $signed(sine_out);
+
+        frequency = -32'sd2000000;
+        rst_n = 0;
+        @(posedge clk);
+        @(posedge clk);
+        rst_n = 1;
+        @(posedge clk);
+        while (!valid_out) @(posedge clk);
+        repeat (5) @(posedge clk);
+        neg_sine = $signed(sine_out);
+
+        $display("  Positive 2 MHz sample sine=%0d", pos_sine);
+        $display("  Negative 2 MHz sample sine=%0d", neg_sine);
+
+        if (pos_sine <= 0) begin
+            $display("  FAIL: Positive frequency did not advance in positive sine direction");
+            ok = 0;
+            return;
+        end
+        if (neg_sine >= 0) begin
+            $display("  FAIL: Negative frequency did not advance in negative sine direction");
+            ok = 0;
+            return;
+        end
+
+        ok = 1;
+    endtask
+
     // =============================================
     // Reusable phase offset test task
     // Verifies sine/cosine quadrant and sign at a
@@ -344,6 +388,7 @@ module lut_waveform_gen_tb;
     integer phase_ok_90;
     integer phase_ok_180;
     integer phase_ok_270;
+    integer signed_dir_ok;
     integer total_failures;
 
     // Test sequence
@@ -398,6 +443,12 @@ module lut_waveform_gen_tb;
         run_frequency_test(10000000, 50000, 1000, 0, measured_freq_3, test_ok_3);
         if (!test_ok_3) total_failures = total_failures + 1;
 
+        // Test 5: Signed direction (+/-2 MHz)
+        $display("\nTEST 5: Signed frequency direction (+/-2 MHz)");
+        $display("----------------------------------------");
+        run_signed_direction_test(signed_dir_ok);
+        if (!signed_dir_ok) total_failures = total_failures + 1;
+
         // =============================================
         // Summary
         // =============================================
@@ -436,6 +487,12 @@ module lut_waveform_gen_tb;
         end else begin
             $display("  FAIL:   %10d Hz  measured %0.1f MHz",
                      10000000, measured_freq_3 / 1e6);
+        end
+
+        if (signed_dir_ok) begin
+            $display("  PASS: signed +/-2 MHz direction check");
+        end else begin
+            $display("  FAIL: signed +/-2 MHz direction check");
         end
 
         $display("========================================");

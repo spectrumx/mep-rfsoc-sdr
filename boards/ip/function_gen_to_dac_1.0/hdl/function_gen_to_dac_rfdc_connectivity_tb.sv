@@ -271,6 +271,26 @@ module function_gen_to_dac_rfdc_connectivity_tb;
             test_failures = test_failures + 1;
         end
 
+        // Lightweight signed-frequency connectivity check: negative frequency
+        // must not change AXIS width, lane packing, or handshake behavior.
+        check_dc_mode = 1'b0;
+        wait_cycles = 0;
+        axi_write(REG_WAVEFORM_TYPE, 32'd1);          // sine/cos mode
+        axi_write(REG_FREQUENCY, 32'hFFE17B80);       // -2,000,000 Hz
+        axi_write(REG_AMPLITUDE, 32'h00007FFF);       // Full scale
+        axi_write(REG_PHASE, 32'd0);
+        axi_write(REG_OFFSET, 32'd0);
+        axi_write(REG_ENABLE, 32'd1);
+        while (rfdc_accepted_beats < 16 && wait_cycles < 300) begin
+            @(posedge m00_axis_aclk);
+            wait_cycles = wait_cycles + 1;
+        end
+        if (rfdc_accepted_beats < 16) begin
+            $display("FAIL: RFDC model did not accept signed-frequency sine/cos beats");
+            test_failures = test_failures + 1;
+        end
+        axi_write(REG_ENABLE, 32'd0);
+
         $display("RFDC DAC connectivity assumptions checked:");
         $display("  M00_AXIS width: %0d bits", $bits(m00_axis_tdata));
         $display("  Beat layout: I0, Q0, I1, Q1");
