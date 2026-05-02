@@ -12,6 +12,7 @@ import time
 from enum import Enum
 
 import paho.mqtt.client as mqtt
+import xrfdc
 
 if __package__ in (None, ""):
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -151,6 +152,40 @@ def resolve_tx_amplitude_q15(args):
     return int(round(amplitude_bins * 0x7FFF / TX_MAX_AMPLITUDE_BINS))
 
 
+def tx_nyquist_zone(f_c_mhz, f_s_mhz):
+    half_sample_rate = f_s_mhz / 2.0
+    if half_sample_rate <= 0:
+        raise ValueError("Sample rate must be greater than 0 MHz")
+    return 2 if abs(f_c_mhz) > half_sample_rate else 1
+
+
+def set_tx_dac_nco(overlay, f_c_mhz, f_s_mhz, tile, block):
+    overlay_method = getattr(type(overlay), "set_dac_nco", None)
+    if overlay_method is not None:
+        overlay.set_dac_nco(f_c_mhz, f_s_mhz, tile, block)
+        return
+
+    f_c_mhz = float(f_c_mhz)
+    f_s_mhz = float(f_s_mhz)
+    pll_freq = 491.52  # MHz — assumed static LMX freq
+
+    mixer = {
+        "CoarseMixFreq": xrfdc.COARSE_MIX_BYPASS,
+        "EventSource": xrfdc.EVNT_SRC_TILE,
+        "FineMixerScale": xrfdc.MIXER_SCALE_1P0,
+        "Freq": f_c_mhz,
+        "MixerMode": xrfdc.MIXER_MODE_C2R,
+        "MixerType": xrfdc.MIXER_TYPE_FINE,
+        "PhaseOffset": 0.0,
+    }
+
+    dac_tile = overlay.rfdc.dac_tiles[tile]
+    dac_tile.DynamicPLLConfig(1, pll_freq, f_s_mhz)
+    dac_tile.blocks[block].NyquistZone = tx_nyquist_zone(f_c_mhz, f_s_mhz)
+    dac_tile.blocks[block].MixerSettings = mixer
+    dac_tile.blocks[block].UpdateEvent(xrfdc.EVENT_MIXER)
+
+
 def configure_tx_function_generator(tx_offset_mhz, tx_amplitude_q15, data):
     gen = getattr(data.ol, "function_gen_to_dac_0", None)
     if gen is None:
@@ -194,7 +229,8 @@ def configure_tx(args, data):
     tx_amplitude_q15 = resolve_tx_amplitude_q15(args)
 
     if args.tx_center_freq is not None:
-        data.ol.set_dac_nco(
+        set_tx_dac_nco(
+            data.ol,
             args.tx_center_freq, DAC_SAMPLE_FREQUENCY, TX_DAC_TILE, TX_DAC_BLOCK
         )
         logging.info("TX DAC center frequency set to %.6f MHz", args.tx_center_freq)
