@@ -165,6 +165,46 @@ module function_gen_to_dac_1_0 #
         dac_word_from_sample_legacy = sat_to_signed_14(sample) * 4;
     endfunction
 
+    function automatic [13:0] sample_magnitude_14(
+        input signed [13:0] sample
+    );
+        begin
+            if (sample[13] && sample !== 14'd8192) begin
+                sample_magnitude_14 = -sample;
+            end else if (sample === 14'd8192) begin
+                sample_magnitude_14 = 14'd8192;
+            end else begin
+                sample_magnitude_14 = sample[13:0];
+            end
+        end
+    endfunction
+
+    function automatic signed [15:0] scaled_word_from_product(
+        input [29:0] product,
+        input sample_sign,
+        input signed [13:0] offset
+    );
+        reg [30:0] rounded_mag;
+        reg signed [31:0] scaled_signed;
+        reg signed [31:0] offset_ext;
+        reg signed [31:0] with_offset;
+        reg signed [13:0] sat_sample;
+        begin
+            rounded_mag = ({1'b0, product} + 31'd16384) >> 15;
+
+            if (sample_sign) begin
+                scaled_signed = -$signed({1'b0, rounded_mag});
+            end else begin
+                scaled_signed = $signed({1'b0, rounded_mag});
+            end
+
+            offset_ext = {{18{offset[13]}}, offset};
+            with_offset = scaled_signed + offset_ext;
+            sat_sample = sat_to_signed_14(with_offset);
+            scaled_word_from_product = {sat_sample, 2'b00};
+        end
+    endfunction
+
     // Step 2.4.3: Byte-lane merge helper for WSTRB-aware writes.
     // Merges new_value into old_value per byte-lane strobes in wstrb.
     // WSTRB[0] -> [7:0], WSTRB[1] -> [15:8], WSTRB[2] -> [23:16], WSTRB[3] -> [31:24].
@@ -390,48 +430,143 @@ module function_gen_to_dac_1_0 #
     assign dc_i_word = sat_to_signed_14({{18{cfg_dac_offset[13]}}, cfg_dac_offset[13:0]}) * 4;
     assign dc_q_word = 16'd0;
 
-    // Pack and output one beat per AXIS clock cycle
+    // Mode-1 DAC scaling pipeline. DSP-facing data registers intentionally
+    // avoid reset so Vivado can absorb them into DSP48 pipeline resources.
+    wire sine_mode_source_valid;
+    assign sine_mode_source_valid = (cfg_dac_waveform_type === 32'd1) &&
+                                    cfg_dac_enable[0] &&
+                                    startup_ok &&
+                                    all_valid;
+
+    reg [13:0] s0_mag0;
+    reg [13:0] s0_mag1;
+    reg [13:0] s0_mag2;
+    reg [13:0] s0_mag3;
+    reg s0_sign0;
+    reg s0_sign1;
+    reg s0_sign2;
+    reg s0_sign3;
+    reg [15:0] s0_amplitude;
+    reg signed [13:0] s0_offset;
+    reg s0_valid;
+
+    reg [29:0] s1_product0;
+    reg [29:0] s1_product1;
+    reg [29:0] s1_product2;
+    reg [29:0] s1_product3;
+    reg s1_sign0;
+    reg s1_sign1;
+    reg s1_sign2;
+    reg s1_sign3;
+    reg signed [13:0] s1_offset;
+    reg s1_valid;
+
+    reg [29:0] s2_product0;
+    reg [29:0] s2_product1;
+    reg [29:0] s2_product2;
+    reg [29:0] s2_product3;
+    reg s2_sign0;
+    reg s2_sign1;
+    reg s2_sign2;
+    reg s2_sign3;
+    reg signed [13:0] s2_offset;
+    reg s2_valid;
+
+    reg [29:0] s3_product0;
+    reg [29:0] s3_product1;
+    reg [29:0] s3_product2;
+    reg [29:0] s3_product3;
+    reg s3_sign0;
+    reg s3_sign1;
+    reg s3_sign2;
+    reg s3_sign3;
+    reg signed [13:0] s3_offset;
+    reg s3_valid;
+
+    always @(posedge m00_axis_aclk) begin
+        // Stage 0: sign/magnitude extraction and common config capture.
+        s0_mag0      <= sample_magnitude_14(sine0);
+        s0_mag1      <= sample_magnitude_14(cosine0);
+        s0_mag2      <= sample_magnitude_14(sine1);
+        s0_mag3      <= sample_magnitude_14(cosine1);
+        s0_sign0     <= sine0[13];
+        s0_sign1     <= cosine0[13];
+        s0_sign2     <= sine1[13];
+        s0_sign3     <= cosine1[13];
+        s0_amplitude <= cfg_dac_amplitude[15:0];
+        s0_offset    <= cfg_dac_offset[13:0];
+
+        // Stage 1: registered multiply products.
+        s1_product0 <= s0_mag0 * s0_amplitude;
+        s1_product1 <= s0_mag1 * s0_amplitude;
+        s1_product2 <= s0_mag2 * s0_amplitude;
+        s1_product3 <= s0_mag3 * s0_amplitude;
+        s1_sign0    <= s0_sign0;
+        s1_sign1    <= s0_sign1;
+        s1_sign2    <= s0_sign2;
+        s1_sign3    <= s0_sign3;
+        s1_offset   <= s0_offset;
+
+        // Stage 2: second product register stage for DSP48 MREG/PREG inference.
+        s2_product0 <= s1_product0;
+        s2_product1 <= s1_product1;
+        s2_product2 <= s1_product2;
+        s2_product3 <= s1_product3;
+        s2_sign0    <= s1_sign0;
+        s2_sign1    <= s1_sign1;
+        s2_sign2    <= s1_sign2;
+        s2_sign3    <= s1_sign3;
+        s2_offset   <= s1_offset;
+
+        // Stage 3: final product register stage for DSP48 output pipeline inference.
+        s3_product0 <= s2_product0;
+        s3_product1 <= s2_product1;
+        s3_product2 <= s2_product2;
+        s3_product3 <= s2_product3;
+        s3_sign0    <= s2_sign0;
+        s3_sign1    <= s2_sign1;
+        s3_sign2    <= s2_sign2;
+        s3_sign3    <= s2_sign3;
+        s3_offset   <= s2_offset;
+    end
+
+    // Valid/control path remains reset-safe and gates the resetless data stages.
     always @(posedge m00_axis_aclk or negedge m00_axis_aresetn) begin
         if (!m00_axis_aresetn) begin
             output_data  <= {C_M00_AXIS_TDATA_WIDTH{1'b0}};
             output_valid <= 1'b0;
+            s0_valid     <= 1'b0;
+            s1_valid     <= 1'b0;
+            s2_valid     <= 1'b0;
+            s3_valid     <= 1'b0;
         end else begin
+            s0_valid <= sine_mode_source_valid;
+            s1_valid <= s0_valid;
+            s2_valid <= s1_valid;
+            s3_valid <= s2_valid;
+
             // Step 2.6: waveform-type multiplexing
             // Mode 1 (sine): pack 4 signed 16-bit RF-DAC words from 2 complex LUT samples.
             // Mode 2 (DC): pack 2 repeated DC I/Q samples from offset register.
             // Mode 0/other (zero): tdata holds last registered value; tvalid forced low.
-            if (cfg_dac_waveform_type === 32'd1) begin
-                output_data <= {
-                    dac_word_from_sample(cosine1, cfg_dac_amplitude[15:0], cfg_dac_offset[13:0]),   // word3  Q1
-                    dac_word_from_sample(sine1,   cfg_dac_amplitude[15:0], cfg_dac_offset[13:0]),   // word2  I1
-                    dac_word_from_sample(cosine0, cfg_dac_amplitude[15:0], cfg_dac_offset[13:0]),   // word1  Q0
-                    dac_word_from_sample(sine0,   cfg_dac_amplitude[15:0], cfg_dac_offset[13:0])    // word0  I0
-                };
-            end else if (cfg_dac_waveform_type === 32'd2) begin
+            if (cfg_dac_waveform_type === 32'd2 && cfg_dac_enable[0]) begin
                 output_data <= {
                     dc_q_word, dc_i_word,
                     dc_q_word, dc_i_word
                 };
-            end
-
-            // Valid control per waveform type:
-            //   zero_output_mode (type 0 or anything other than 1/2): always deasserted
-            //   sine mode (type 1): asserted when enabled, startup guard passed, all generators valid
-            //   DC mode (type 2): asserted when enabled (no LUT startup guard needed)
-            if (zero_output_mode) begin
-                output_valid <= 1'b0;
-            end else if (!cfg_dac_enable[0]) begin
-                output_valid <= 1'b0;
-            end else if (cfg_dac_waveform_type === 32'd1) begin
-                if (!startup_ok) begin
-                    output_valid <= 1'b0;
-                end else if (all_valid) begin
-                    output_valid <= 1'b1;
-                end else begin
-                    output_valid <= 1'b0;
-                end
-            end else if (cfg_dac_waveform_type === 32'd2) begin
                 output_valid <= 1'b1;
+            end else if (cfg_dac_waveform_type === 32'd1 &&
+                         cfg_dac_enable[0] &&
+                         s3_valid) begin
+                output_data <= {
+                    scaled_word_from_product(s3_product3, s3_sign3, s3_offset),   // word3  Q1
+                    scaled_word_from_product(s3_product2, s3_sign2, s3_offset),   // word2  I1
+                    scaled_word_from_product(s3_product1, s3_sign1, s3_offset),   // word1  Q0
+                    scaled_word_from_product(s3_product0, s3_sign0, s3_offset)    // word0  I0
+                };
+                output_valid <= 1'b1;
+            end else if (zero_output_mode || !cfg_dac_enable[0]) begin
+                output_valid <= 1'b0;
             end else begin
                 output_valid <= 1'b0;
             end
