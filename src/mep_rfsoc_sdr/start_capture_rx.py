@@ -81,6 +81,10 @@ class CaptureData:
         self.channels = []
         self.mqtt_client = None
         self.ol = None
+        self.tx_channels = TX_DEFAULT_CHANNELS
+        self.tx_center_freq = None
+        self.tx_offset_freq = 0.0
+        self.tx_amplitude_bins = TX_DEFAULT_AMPLITUDE_BINS
 
 
 data = CaptureData()
@@ -98,6 +102,10 @@ def send_status(data):
         "f_s": data.f_s,
         "pps_count": getattr(data, "pps_count", 0),
         "channels": data.channels,
+        "tx_channels": data.tx_channels,
+        "tx_center_freq": data.tx_center_freq,
+        "tx_offset_freq": data.tx_offset_freq,
+        "tx_amplitude_bins": data.tx_amplitude_bins,
     }
     if data.mqtt_client:
         data.mqtt_client.publish(status_topic, json.dumps(status_payload), retain=True)
@@ -326,6 +334,60 @@ def on_message(client, userdata, msg):
                 logging.info(f"Set active channels to: {data.channels}")
                 set_channel_ctrl(Ctrl.RESET, data)
                 send_status(data)
+            elif set_param == "tx_center_freq":
+                tx_freq_mhz = float(set_value)
+                data.tx_center_freq = tx_freq_mhz
+                for ch in data.tx_channels:
+                    cfg = TX_CHANNEL_CONFIG[ch]
+                    set_tx_dac_nco(
+                        data.ol,
+                        tx_freq_mhz,
+                        DAC_SAMPLE_FREQUENCY,
+                        cfg["dac_tile"],
+                        cfg["dac_block"],
+                    )
+                logging.info(f"TX center frequency set to {tx_freq_mhz:.6f} MHz")
+                send_status(data)
+            elif set_param == "tx_offset_freq":
+                tx_offset = float(set_value)
+                if abs(tx_offset) >= TX_BASEBAND_NYQUIST_MHZ:
+                    logging.warning(
+                        f"tx_offset_freq magnitude must be less than "
+                        f"{TX_BASEBAND_NYQUIST_MHZ:.1f} MHz, got {tx_offset}"
+                    )
+                else:
+                    data.tx_offset_freq = tx_offset
+                    tx_amp_q15 = int(
+                        round(data.tx_amplitude_bins * 0x7FFF / TX_MAX_AMPLITUDE_BINS)
+                    )
+                    for ch in data.tx_channels:
+                        configure_tx_function_generator(ch, tx_offset, tx_amp_q15, data)
+                    logging.info(f"TX offset frequency set to {tx_offset:.6f} MHz")
+                send_status(data)
+            elif set_param == "tx_amplitude":
+                tx_amp = int(set_value)
+                if tx_amp < 0 or tx_amp > TX_MAX_AMPLITUDE_BINS:
+                    logging.warning(
+                        f"tx_amplitude must be in DAC bins 0..{TX_MAX_AMPLITUDE_BINS}, got {tx_amp}"
+                    )
+                else:
+                    data.tx_amplitude_bins = tx_amp
+                    tx_amp_q15 = int(round(tx_amp * 0x7FFF / TX_MAX_AMPLITUDE_BINS))
+                    for ch in data.tx_channels:
+                        configure_tx_function_generator(
+                            ch, data.tx_offset_freq, tx_amp_q15, data
+                        )
+                    logging.info(f"TX amplitude set to {tx_amp} DAC bins")
+                send_status(data)
+            elif set_param == "tx_channel":
+                if set_value not in TX_CHANNEL_CHOICES:
+                    logging.warning(
+                        f"tx_channel must be one of {TX_CHANNEL_CHOICES}, got {set_value}"
+                    )
+                else:
+                    data.tx_channels = tuple(set_value.split(","))
+                    logging.info(f"TX channels set to: {data.tx_channels}")
+                send_status(data)
             else:
                 logging.warning(f"Unknown set parameter: {set_param} value {set_value}")
         elif command == "get":
@@ -468,6 +530,14 @@ def run(args):
 
     # Configure optional DAC0 TX tone. RX setup still proceeds normally.
     configure_tx(args, data)
+
+    # Seed TX state from CLI args for MQTT status
+    data.tx_channels = resolve_tx_channels(args)
+    data.tx_center_freq = args.tx_center_freq
+    data.tx_offset_freq = 0.0 if args.tx_offset_freq is None else float(args.tx_offset_freq)
+    data.tx_amplitude_bins = (
+        TX_DEFAULT_AMPLITUDE_BINS if args.tx_amplitude is None else int(args.tx_amplitude)
+    )
 
     # Set active channels
     data.channels = ALL_CHANNELS
