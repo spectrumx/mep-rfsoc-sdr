@@ -42,6 +42,24 @@ def download_release_asset(asset_name, version, destination):
     download_file(release_asset_url(asset_name), destination)
 
 
+def stage_bitstream_asset(asset_name, version, src_file):
+    dist_file = DIST_BITSTREAM_DIR / asset_name
+    if src_file.exists():
+        shutil.copy2(src_file, dist_file)
+        return
+    if dist_file.exists():
+        return
+
+    print(f"Required {asset_name} file not found locally. Attempting to download...")
+    download_release_asset(asset_name, version, dist_file)
+
+
+def force_include_destination(target_name):
+    if target_name == "wheel":
+        return "mep_rfsoc_sdr/bitstream"
+    return "src/bitstream"
+
+
 class BitstreamHook(BuildHookInterface):
     def clean(self, versions) -> None:
         for dirpath, _dirnames, filenames in DIST_BITSTREAM_DIR.walk():
@@ -62,29 +80,12 @@ class BitstreamHook(BuildHookInterface):
         src_bitstream_file = src_bitstream_dir / "sdr_bitstream.bit"
         src_hwh_file = src_bitstream_dir / "sdr_bitstream.hwh"
 
-        if src_bitstream_file.exists():
-            shutil.copy2(src_bitstream_file, DIST_BITSTREAM_DIR)
-        else:
-            print(
-                "Required bitstream file not found locally. Attempting to download..."
-            )
-            download_release_asset(
-                "sdr_bitstream.bit",
-                version,
-                DIST_BITSTREAM_DIR / "sdr_bitstream.bit",
-            )
+        stage_bitstream_asset("sdr_bitstream.bit", version, src_bitstream_file)
+        stage_bitstream_asset("sdr_bitstream.hwh", version, src_hwh_file)
 
-        if src_hwh_file.exists():
-            shutil.copy2(src_hwh_file, DIST_BITSTREAM_DIR)
-        else:
-            print("Required HWH file not found locally. Attempting to download...")
-            download_release_asset(
-                "sdr_bitstream.hwh",
-                version,
-                DIST_BITSTREAM_DIR / "sdr_bitstream.hwh",
-            )
-
-        build_data["force_include"][str(DIST_BITSTREAM_DIR)] = "src/bitstream"
+        build_data["force_include"][str(DIST_BITSTREAM_DIR)] = (
+            force_include_destination(self.target_name)
+        )
 
     def finalize(self, version, build_data, artifact_path) -> None:
         pass
