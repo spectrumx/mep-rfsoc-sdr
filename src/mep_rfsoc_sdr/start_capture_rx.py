@@ -36,7 +36,7 @@ DAC_SAMPLE_FREQUENCY = 1024  # MSps
 ADC_DECIMATION = 16
 ADC_IF = 1090  # MHz
 ALL_CHANNELS = ["A", "B", "C", "D"]
-TX_CHANNEL_CHOICES = ("A", "B", "A,B")
+TX_CHANNEL_CHOICES = ("A", "B", "A,B", "None")
 TX_DEFAULT_CHANNELS = ("A",)
 TX_WAVEFORM_SINE_COS = 1
 TX_BASEBAND_NYQUIST_MHZ = 32.0
@@ -163,6 +163,8 @@ def resolve_tx_offset_mhz(args):
 def resolve_tx_channels(args):
     if args.tx_channel is None:
         return TX_DEFAULT_CHANNELS
+    if args.tx_channel == "None":
+        return ()
     return tuple(args.tx_channel.split(","))
 
 
@@ -392,7 +394,7 @@ def on_message(client, userdata, msg):
                         f"tx_channel must be one of {TX_CHANNEL_CHOICES}, got {set_value}"
                     )
                 else:
-                    new_channels = tuple(set_value.split(","))
+                    new_channels = () if set_value == "None" else tuple(set_value.split(","))
                     tx_amp_q15 = int(
                         round(data.tx_amplitude_bins * 0x7FFF / TX_MAX_AMPLITUDE_BINS)
                     )
@@ -642,7 +644,7 @@ def main():
         type=str,
         default=None,
         choices=TX_CHANNEL_CHOICES,
-        help="TX DAC output channel: A, B, or A,B; defaults to A",
+        help="TX DAC output channel: A, B, A,B, or None (disable all); defaults to A",
     )
     parser.add_argument(
         "--tx-center-freq",
