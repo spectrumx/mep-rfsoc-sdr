@@ -36,15 +36,27 @@ DAC_SAMPLE_FREQUENCY = 1024  # MSps
 ADC_DECIMATION = 16
 ADC_IF = 1090  # MHz
 ALL_CHANNELS = ["A", "B", "C", "D"]
+TX_CHANNEL_CHOICES = ("A", "B", "A,B")
+TX_DEFAULT_CHANNELS = ("A",)
 TX_WAVEFORM_SINE_COS = 1
 TX_BASEBAND_NYQUIST_MHZ = 32.0
-TX_DAC_TILE = 0
-TX_DAC_BLOCK = 0
 TX_MAX_AMPLITUDE_BINS = 8191
 TX_DEFAULT_AMPLITUDE_BINS = 8191
 TX_DEFAULT_PHASE = 0
 TX_DEFAULT_OFFSET = 0
 TX_FREQUENCY_REG_BITS = 32
+TX_CHANNEL_CONFIG = {
+    "A": {
+        "dac_tile": 2,
+        "dac_block": 0,
+        "function_generators": ("function_gen_to_dac_A",),
+    },
+    "B": {
+        "dac_tile": 0,
+        "dac_block": 0,
+        "function_generators": ("function_gen_to_dac_B",),
+    },
+}
 
 GREEN = "\033[92m"
 BLUE = "\033[94m"
@@ -125,6 +137,7 @@ def resolve_tx_offset_mhz(args):
         args.tx_center_freq is not None
         or args.tx_offset_freq is not None
         or args.tx_amplitude is not None
+        or args.tx_channel is not None
     )
     if not tx_requested:
         return None
@@ -137,6 +150,12 @@ def resolve_tx_offset_mhz(args):
         )
 
     return tx_offset_mhz
+
+
+def resolve_tx_channels(args):
+    if args.tx_channel is None:
+        return TX_DEFAULT_CHANNELS
+    return tuple(args.tx_channel.split(","))
 
 
 def resolve_tx_amplitude_q15(args):
@@ -199,19 +218,33 @@ def set_tx_dac_nco(overlay, f_c_mhz, f_s_mhz, tile, block):
     dac_tile.blocks[block].UpdateEvent(xrfdc.EVENT_MIXER)
 
 
-def configure_tx_function_generator(tx_offset_mhz, tx_amplitude_q15, data):
-    gen = getattr(data.ol, "function_gen_to_dac_0", None)
+def configure_tx_function_generator(channel, tx_offset_mhz, tx_amplitude_q15, data):
+    generator_names = TX_CHANNEL_CONFIG[channel]["function_generators"]
+    gen_name = None
+    gen = None
+    for candidate in generator_names:
+        gen = getattr(data.ol, candidate, None)
+        if gen is not None:
+            gen_name = candidate
+            break
+
     if gen is None:
         if tx_offset_mhz is None:
-            logging.info("TX function generator IP not present; nothing to disable")
+            logging.info(
+                "TX function generator IP for channel %s not present; nothing to disable",
+                channel,
+            )
             return
-        raise RuntimeError("Overlay does not expose function_gen_to_dac_0")
+        raise RuntimeError(
+            f"Overlay does not expose a TX function generator for channel {channel} "
+            f"({', '.join(generator_names)})"
+        )
 
     regs = gen.register_map
     regs.ENABLE = 0
 
     if tx_offset_mhz is None:
-        logging.info("TX function generator disabled")
+        logging.info("TX channel %s function generator %s disabled", channel, gen_name)
         return
 
     tx_offset_mhz = float(tx_offset_mhz)
@@ -225,8 +258,10 @@ def configure_tx_function_generator(tx_offset_mhz, tx_amplitude_q15, data):
     regs.OFFSET = TX_DEFAULT_OFFSET
     regs.ENABLE = 1
     logging.info(
-        "TX function generator enabled at signed offset %.6f MHz "
+        "TX channel %s function generator %s enabled at signed offset %.6f MHz "
         "(programmed %d Hz as 0x%08X, amplitude Q15 0x%04X)",
+        channel,
+        gen_name,
         tx_offset_mhz,
         tx_offset_hz,
         tx_offset_reg,
@@ -235,17 +270,26 @@ def configure_tx_function_generator(tx_offset_mhz, tx_amplitude_q15, data):
 
 
 def configure_tx(args, data):
+    tx_channels = resolve_tx_channels(args)
     tx_offset_mhz = resolve_tx_offset_mhz(args)
     tx_amplitude_q15 = resolve_tx_amplitude_q15(args)
 
-    if args.tx_center_freq is not None:
-        set_tx_dac_nco(
-            data.ol,
-            args.tx_center_freq, DAC_SAMPLE_FREQUENCY, TX_DAC_TILE, TX_DAC_BLOCK
-        )
-        logging.info("TX DAC center frequency set to %.6f MHz", args.tx_center_freq)
+    for channel in tx_channels:
+        if args.tx_center_freq is not None:
+            set_tx_dac_nco(
+                data.ol,
+                args.tx_center_freq,
+                DAC_SAMPLE_FREQUENCY,
+                TX_CHANNEL_CONFIG[channel]["dac_tile"],
+                TX_CHANNEL_CONFIG[channel]["dac_block"],
+            )
+            logging.info(
+                "TX channel %s DAC center frequency set to %.6f MHz",
+                channel,
+                args.tx_center_freq,
+            )
 
-    configure_tx_function_generator(tx_offset_mhz, tx_amplitude_q15, data)
+        configure_tx_function_generator(channel, tx_offset_mhz, tx_amplitude_q15, data)
 
 
 def on_message(client, userdata, msg):
@@ -454,10 +498,15 @@ def run(args):
                 data.pps_count = pps
                 pps_count_last = pps
     finally:
-        try:
-            configure_tx_function_generator(None, None, data)
-        except Exception as e:
-            logging.warning("Failed to disable TX function generator: %s", e)
+        for channel in TX_CHANNEL_CONFIG:
+            try:
+                configure_tx_function_generator(channel, None, None, data)
+            except Exception as e:
+                logging.warning(
+                    "Failed to disable TX channel %s function generator: %s",
+                    channel,
+                    e,
+                )
         mqtt_client.loop_stop()
 
     logging.info("Exiting and resetting channels.")
@@ -501,17 +550,24 @@ def main():
         help="Use internal clock instead of external ref",
     )
     parser.add_argument(
+        "--tx-channel",
+        type=str,
+        default=None,
+        choices=TX_CHANNEL_CHOICES,
+        help="TX DAC output channel: A, B, or A,B; defaults to A",
+    )
+    parser.add_argument(
         "--tx-center-freq",
         type=float,
         default=None,
-        help="Set DAC0 RFDC mixer/NCO center frequency in MHz",
+        help="Set selected TX DAC RFDC mixer/NCO center frequency in MHz",
     )
     parser.add_argument(
         "--tx-offset-freq",
         type=float,
         default=None,
         help=(
-            "DAC0 function-generator baseband offset frequency in MHz; "
+            "Selected TX DAC function-generator baseband offset frequency in MHz; "
             "defaults to 0 when TX is otherwise requested"
         ),
     )
