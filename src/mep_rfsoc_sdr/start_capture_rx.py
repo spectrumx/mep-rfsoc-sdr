@@ -282,6 +282,13 @@ def configure_tx(args, data):
     tx_offset_mhz = resolve_tx_offset_mhz(args)
     tx_amplitude_q15 = resolve_tx_amplitude_q15(args)
 
+    for channel in TX_CHANNEL_CONFIG:
+        if channel not in tx_channels:
+            configure_tx_function_generator(channel, None, None, data)
+
+    if tx_offset_mhz is None:
+        return
+
     for channel in tx_channels:
         if args.tx_center_freq is not None:
             set_tx_dac_nco(
@@ -385,7 +392,18 @@ def on_message(client, userdata, msg):
                         f"tx_channel must be one of {TX_CHANNEL_CHOICES}, got {set_value}"
                     )
                 else:
-                    data.tx_channels = tuple(set_value.split(","))
+                    new_channels = tuple(set_value.split(","))
+                    tx_amp_q15 = int(
+                        round(data.tx_amplitude_bins * 0x7FFF / TX_MAX_AMPLITUDE_BINS)
+                    )
+                    for ch in TX_CHANNEL_CONFIG:
+                        if ch not in new_channels:
+                            configure_tx_function_generator(ch, None, None, data)
+                        else:
+                            configure_tx_function_generator(
+                                ch, data.tx_offset_freq, tx_amp_q15, data
+                            )
+                    data.tx_channels = new_channels
                     logging.info(f"TX channels set to: {data.tx_channels}")
                 send_status(data)
             else:
