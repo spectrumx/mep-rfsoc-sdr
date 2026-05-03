@@ -1,0 +1,758 @@
+#!/usr/bin/env python3
+
+import argparse
+import fcntl
+import importlib.resources
+import json
+import logging
+import os
+import signal
+import sys
+import time
+from enum import Enum
+
+import paho.mqtt.client as mqtt
+import xrfdc
+
+if __package__ in (None, ""):
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from sdr_overlay import SDROverlay
+else:
+    from .sdr_overlay import SDROverlay
+
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+BITFILE_NAME = "sdr_bitstream.bit"
+
+service_name = "rfsoc"
+MQTT_BROKER = "192.168.20.1"
+MQTT_PORT = 1883
+MQTT_CMD_TOPIC = service_name + "/command"
+MQTT_TLM_TOPIC = "rfcapture/telemetry"
+LOG_DIR = os.path.join(os.sep, "var", "log", "spectrumx")
+LOCK_FILE = os.path.join(os.sep, "var", "lock", service_name + ".lock")
+
+ADC_SAMPLE_FREQUENCY = 1024  # MSps
+DAC_SAMPLE_FREQUENCY = 1024  # MSps
+ADC_DECIMATION = 16
+ADC_IF = 1090  # MHz
+ALL_CHANNELS = ["A", "B", "C", "D"]
+TX_CHANNEL_CHOICES = ("A", "B", "A,B", "None")
+TX_DEFAULT_CHANNELS = ("A",)
+TX_WAVEFORM_SINE_COS = 1
+TX_BASEBAND_NYQUIST_MHZ = 32.0
+TX_MAX_AMPLITUDE_BINS = 8191
+TX_DEFAULT_AMPLITUDE_BINS = 8191
+TX_DEFAULT_PHASE = 0
+TX_DEFAULT_OFFSET = 0
+TX_DEFAULT_OFFSET_FREQ_MHZ = 0.0
+TX_FREQUENCY_REG_BITS = 32
+TX_CHANNEL_CONFIG = {
+    "A": {
+        "dac_tile": 2,
+        "dac_block": 0,
+        "function_generators": ("function_gen_to_dac_A",),
+    },
+    "B": {
+        "dac_tile": 0,
+        "dac_block": 0,
+        "function_generators": ("function_gen_to_dac_B",),
+    },
+}
+
+GREEN = "\033[92m"
+BLUE = "\033[94m"
+RED = "\033[91m"
+RESET = "\033[0m"
+
+exit_flag = False
+
+
+class Ctrl(Enum):
+    CAPTURE = 0
+    RESET = 1
+    CAPTURE_NEXT_PPS = 3
+
+
+class CaptureData:
+    def __init__(self):
+        self.state = "inactive"
+        self.f_c_hz = float("nan")
+        self.f_if_hz = float("nan")
+        self.f_s = float("nan")
+        self.channels = []
+        self.mqtt_client = None
+        self.ol = None
+        self.tx_channels = TX_DEFAULT_CHANNELS
+        self.tx_center_freq = None
+        self.tx_offset_freq = TX_DEFAULT_OFFSET_FREQ_MHZ
+        self.tx_offset_freq_by_channel = {
+            channel: TX_DEFAULT_OFFSET_FREQ_MHZ for channel in TX_CHANNEL_CONFIG
+        }
+        self.tx_amplitude_bins = TX_DEFAULT_AMPLITUDE_BINS
+
+
+data = CaptureData()
+
+
+def send_status(data):
+    """
+    Publish the current state and tuned frequency to the MQTT status topic.
+    """
+    status_topic = f"{service_name}/status"
+    status_payload = {
+        "state": data.state,
+        "f_c_hz": data.f_c_hz,
+        "f_if_hz": data.f_if_hz,
+        "f_s": data.f_s,
+        "pps_count": getattr(data, "pps_count", 0),
+        "channels": data.channels,
+        "tx_channels": data.tx_channels,
+        "tx_center_freq": data.tx_center_freq,
+        "tx_offset_freq": data.tx_offset_freq,
+        "tx_offset_freq_by_channel": data.tx_offset_freq_by_channel,
+        "tx_amplitude_bins": data.tx_amplitude_bins,
+    }
+    if data.mqtt_client:
+        data.mqtt_client.publish(status_topic, json.dumps(status_payload), retain=True)
+
+
+def signal_handler(sig, frame):
+    global exit_flag
+    logging.info("Exiting RF capture")
+    exit_flag = True
+
+
+def get_bitfile_path():
+    """Get the bitfile path using importlib.resources"""
+    try:
+        # Try to get the bitfile from the installed package
+        bitfile_path = (
+            importlib.resources.files("mep_rfsoc_sdr") / "bitstream" / BITFILE_NAME
+        )
+        if bitfile_path.exists():
+            return str(bitfile_path)
+    except Exception as e:
+        logging.warning(f"Could not find bitfile in package: {e}")
+
+    # Fallback to local path for development
+    local_bitfile_path = os.path.join(SCRIPT_DIR, "..", "bitstream", BITFILE_NAME)
+    if os.path.exists(local_bitfile_path):
+        logging.info(f"Using local bitfile: {local_bitfile_path}")
+        return local_bitfile_path
+
+    raise FileNotFoundError(
+        f"Could not find bitfile {BITFILE_NAME} in package or local directory"
+    )
+
+
+def resolve_tx_offset_mhz(args):
+    tx_requested = (
+        args.tx_center_freq is not None
+        or args.tx_offset_freq is not None
+        or args.tx_amplitude is not None
+        or args.tx_channel is not None
+    )
+    if not tx_requested:
+        return None
+
+    tx_offset_mhz = 0.0 if args.tx_offset_freq is None else float(args.tx_offset_freq)
+    if abs(tx_offset_mhz) >= TX_BASEBAND_NYQUIST_MHZ:
+        raise ValueError(
+            f"--tx-offset-freq magnitude must be less than "
+            f"{TX_BASEBAND_NYQUIST_MHZ:.1f} MHz"
+        )
+
+    return tx_offset_mhz
+
+
+def resolve_tx_channels(args):
+    if args.tx_channel is None:
+        return TX_DEFAULT_CHANNELS
+    if args.tx_channel == "None":
+        return ()
+    return tuple(args.tx_channel.split(","))
+
+
+def resolve_tx_amplitude_q15(args):
+    amplitude_bins = (
+        TX_DEFAULT_AMPLITUDE_BINS
+        if args.tx_amplitude is None
+        else int(args.tx_amplitude)
+    )
+    if amplitude_bins < 0 or amplitude_bins > TX_MAX_AMPLITUDE_BINS:
+        raise ValueError(
+            f"--tx-amplitude must be in DAC bins 0..{TX_MAX_AMPLITUDE_BINS}"
+        )
+
+    return tx_amplitude_bins_to_q15(amplitude_bins)
+
+
+def tx_amplitude_bins_to_q15(amplitude_bins):
+    return int(round(amplitude_bins * 0x7FFF / TX_MAX_AMPLITUDE_BINS))
+
+
+def encode_signed_frequency_hz(frequency_hz):
+    min_hz = -(1 << (TX_FREQUENCY_REG_BITS - 1))
+    max_hz = (1 << (TX_FREQUENCY_REG_BITS - 1)) - 1
+    if frequency_hz < min_hz or frequency_hz > max_hz:
+        raise ValueError(
+            f"TX offset frequency must fit signed {TX_FREQUENCY_REG_BITS}-bit Hz "
+            f"register ({min_hz}..{max_hz} Hz)"
+        )
+
+    return frequency_hz & ((1 << TX_FREQUENCY_REG_BITS) - 1)
+
+
+def tx_nyquist_zone(f_c_mhz, f_s_mhz):
+    half_sample_rate = f_s_mhz / 2.0
+    if half_sample_rate <= 0:
+        raise ValueError("Sample rate must be greater than 0 MHz")
+    return 2 if abs(f_c_mhz) > half_sample_rate else 1
+
+
+def set_tx_dac_nco(overlay, f_c_mhz, f_s_mhz, tile, block):
+    overlay_method = getattr(type(overlay), "set_dac_nco", None)
+    if overlay_method is not None:
+        overlay.set_dac_nco(f_c_mhz, f_s_mhz, tile, block)
+        return
+
+    f_c_mhz = float(f_c_mhz)
+    f_s_mhz = float(f_s_mhz)
+    pll_freq = 491.52  # MHz — assumed static LMX freq
+
+    mixer = {
+        "CoarseMixFreq": xrfdc.COARSE_MIX_BYPASS,
+        "EventSource": xrfdc.EVNT_SRC_TILE,
+        "FineMixerScale": xrfdc.MIXER_SCALE_1P0,
+        "Freq": f_c_mhz,
+        "MixerMode": xrfdc.MIXER_MODE_C2R,
+        "MixerType": xrfdc.MIXER_TYPE_FINE,
+        "PhaseOffset": 0.0,
+    }
+
+    dac_tile = overlay.rfdc.dac_tiles[tile]
+    dac_tile.DynamicPLLConfig(1, pll_freq, f_s_mhz)
+    dac_tile.blocks[block].NyquistZone = tx_nyquist_zone(f_c_mhz, f_s_mhz)
+    dac_tile.blocks[block].MixerSettings = mixer
+    dac_tile.blocks[block].UpdateEvent(xrfdc.EVENT_MIXER)
+
+
+def get_tx_function_generator(channel, data, required):
+    generator_names = TX_CHANNEL_CONFIG[channel]["function_generators"]
+    gen_name = None
+    gen = None
+    for candidate in generator_names:
+        gen = getattr(data.ol, candidate, None)
+        if gen is not None:
+            gen_name = candidate
+            break
+
+    if gen is None:
+        if not required:
+            logging.info(
+                "TX function generator IP for channel %s not present; nothing to disable",
+                channel,
+            )
+            return None, None
+        raise RuntimeError(
+            f"Overlay does not expose a TX function generator for channel {channel} "
+            f"({', '.join(generator_names)})"
+        )
+
+    return gen_name, gen
+
+
+def set_tx_function_generator_amplitude(channel, tx_amplitude_q15, data):
+    gen_name, gen = get_tx_function_generator(channel, data, required=False)
+    if gen is None:
+        return
+
+    gen.register_map.AMPLITUDE = tx_amplitude_q15
+    logging.info(
+        "TX channel %s function generator %s amplitude set to Q15 0x%04X",
+        channel,
+        gen_name,
+        tx_amplitude_q15,
+    )
+
+
+def configure_tx_function_generator(channel, tx_offset_mhz, tx_amplitude_q15, data):
+    gen_name, gen = get_tx_function_generator(
+        channel,
+        data,
+        required=tx_offset_mhz is not None,
+    )
+    if gen is None:
+        return
+
+    regs = gen.register_map
+
+    if tx_offset_mhz is None:
+        regs.AMPLITUDE = 0
+        regs.WAVEFORM_TYPE = 0
+        regs.FREQUENCY = 0
+        regs.PHASE = TX_DEFAULT_PHASE
+        regs.OFFSET = TX_DEFAULT_OFFSET
+        regs.ENABLE = 0
+        logging.info("TX channel %s function generator %s disabled", channel, gen_name)
+        return
+
+    regs.ENABLE = 0
+
+    tx_offset_mhz = float(tx_offset_mhz)
+    tx_offset_hz = int(round(tx_offset_mhz * 1e6))
+    tx_offset_reg = encode_signed_frequency_hz(tx_offset_hz)
+
+    regs.WAVEFORM_TYPE = TX_WAVEFORM_SINE_COS
+    regs.FREQUENCY = tx_offset_reg
+    regs.AMPLITUDE = tx_amplitude_q15
+    regs.PHASE = TX_DEFAULT_PHASE
+    regs.OFFSET = TX_DEFAULT_OFFSET
+    regs.ENABLE = 1
+    logging.info(
+        "TX channel %s function generator %s enabled at signed offset %.6f MHz "
+        "(programmed %d Hz as 0x%08X, amplitude Q15 0x%04X)",
+        channel,
+        gen_name,
+        tx_offset_mhz,
+        tx_offset_hz,
+        tx_offset_reg,
+        tx_amplitude_q15,
+    )
+
+
+def configure_tx(args, data):
+    tx_channels = resolve_tx_channels(args)
+    tx_offset_mhz = resolve_tx_offset_mhz(args)
+    tx_amplitude_q15 = resolve_tx_amplitude_q15(args)
+
+    for channel in TX_CHANNEL_CONFIG:
+        if channel not in tx_channels:
+            configure_tx_function_generator(channel, None, None, data)
+
+    if tx_offset_mhz is None:
+        return
+
+    for channel in tx_channels:
+        data.tx_offset_freq_by_channel[channel] = tx_offset_mhz
+        if args.tx_center_freq is not None:
+            set_tx_dac_nco(
+                data.ol,
+                args.tx_center_freq,
+                DAC_SAMPLE_FREQUENCY,
+                TX_CHANNEL_CONFIG[channel]["dac_tile"],
+                TX_CHANNEL_CONFIG[channel]["dac_block"],
+            )
+            logging.info(
+                "TX channel %s DAC center frequency set to %.6f MHz",
+                channel,
+                args.tx_center_freq,
+            )
+
+        configure_tx_function_generator(channel, tx_offset_mhz, tx_amplitude_q15, data)
+
+
+def on_message(client, userdata, msg):
+    global data
+    try:
+        message = json.loads(msg.payload.decode())
+        logging.debug(f"Received MQTT: {message}")
+        command = message.get("task_name", None)
+        if command is None:
+            logging.warning("Invalid command format")
+            return
+
+        args = message.get("arguments", "")
+
+        if command == "reset":
+            set_channel_ctrl(Ctrl.RESET, data)
+            send_status(data)
+        elif command == "capture":
+            capture_now(data)
+            send_status(data)
+        elif command == "capture_next_pps":
+            capture_next_pps(data)
+            send_status(data)
+        elif command == "set":
+            set_param, set_value = args.split(" ")
+            if set_param == "freq_metadata":
+                set_freq_metadata(set_value, data)
+                send_status(data)
+            elif set_param == "freq_IF":
+                update_adc_nco(set_value, data)
+                send_status(data)
+            elif set_param == "channel":
+                data.channels = [ch for ch in set_value.split(",")]
+                logging.info(f"Set active channels to: {data.channels}")
+                set_channel_ctrl(Ctrl.RESET, data)
+                send_status(data)
+            elif set_param == "tx_center_freq":
+                tx_freq_mhz = float(set_value)
+                data.tx_center_freq = tx_freq_mhz
+                for ch in data.tx_channels:
+                    cfg = TX_CHANNEL_CONFIG[ch]
+                    set_tx_dac_nco(
+                        data.ol,
+                        tx_freq_mhz,
+                        DAC_SAMPLE_FREQUENCY,
+                        cfg["dac_tile"],
+                        cfg["dac_block"],
+                    )
+                logging.info(f"TX center frequency set to {tx_freq_mhz:.6f} MHz")
+                send_status(data)
+            elif set_param == "tx_offset_freq":
+                tx_offset = float(set_value)
+                if abs(tx_offset) >= TX_BASEBAND_NYQUIST_MHZ:
+                    logging.warning(
+                        f"tx_offset_freq magnitude must be less than "
+                        f"{TX_BASEBAND_NYQUIST_MHZ:.1f} MHz, got {tx_offset}"
+                    )
+                else:
+                    data.tx_offset_freq = tx_offset
+                    tx_amp_q15 = tx_amplitude_bins_to_q15(data.tx_amplitude_bins)
+                    for ch in data.tx_channels:
+                        data.tx_offset_freq_by_channel[ch] = tx_offset
+                        configure_tx_function_generator(ch, tx_offset, tx_amp_q15, data)
+                    logging.info(f"TX offset frequency set to {tx_offset:.6f} MHz")
+                send_status(data)
+            elif set_param == "tx_amplitude":
+                tx_amp = int(set_value)
+                if tx_amp < 0 or tx_amp > TX_MAX_AMPLITUDE_BINS:
+                    logging.warning(
+                        f"tx_amplitude must be in DAC bins 0..{TX_MAX_AMPLITUDE_BINS}, got {tx_amp}"
+                    )
+                else:
+                    data.tx_amplitude_bins = tx_amp
+                    tx_amp_q15 = tx_amplitude_bins_to_q15(tx_amp)
+                    for ch in data.tx_channels:
+                        configure_tx_function_generator(
+                            ch, data.tx_offset_freq_by_channel[ch], tx_amp_q15, data
+                        )
+                    logging.info(f"TX amplitude set to {tx_amp} DAC bins")
+                send_status(data)
+            elif set_param == "tx_channel":
+                if set_value not in TX_CHANNEL_CHOICES:
+                    logging.warning(
+                        f"tx_channel must be one of {TX_CHANNEL_CHOICES}, got {set_value}"
+                    )
+                else:
+                    if set_value == "None":
+                        data.tx_amplitude_bins = 0
+                        for ch in TX_CHANNEL_CONFIG:
+                            set_tx_function_generator_amplitude(ch, 0, data)
+
+                    new_channels = (
+                        () if set_value == "None" else tuple(set_value.split(","))
+                    )
+                    tx_amp_q15 = tx_amplitude_bins_to_q15(data.tx_amplitude_bins)
+                    for ch in TX_CHANNEL_CONFIG:
+                        if ch not in new_channels:
+                            configure_tx_function_generator(ch, None, None, data)
+                        else:
+                            configure_tx_function_generator(
+                                ch,
+                                data.tx_offset_freq_by_channel[ch],
+                                tx_amp_q15,
+                                data,
+                            )
+                    data.tx_channels = new_channels
+                    logging.info(f"TX channels set to: {data.tx_channels}")
+                send_status(data)
+            else:
+                logging.warning(f"Unknown set parameter: {set_param} value {set_value}")
+        elif command == "get":
+            if args and args[0] == "tlm":
+                send_status(data)
+    except Exception as e:
+        logging.error(f"Error processing MQTT message: {e}")
+
+
+def update_adc_nco(freq_mhz, data):
+    freq_mhz = float(freq_mhz)  # <=== THIS LINE FIXES IT
+    # metadata only supports tuning with kHz precision, so round to kHz for actual tune
+    freq_mhz = round(freq_mhz, 3)
+    freq_hz = freq_mhz * 1e6
+    data.f_if_hz = freq_hz
+
+    try:
+        for tile, block in [(0, 0), (0, 1), (2, 0), (2, 1)]:
+            data.ol.set_adc_nco(-freq_mhz, ADC_SAMPLE_FREQUENCY, tile, block)
+
+        set_sample_rate((ADC_SAMPLE_FREQUENCY * 1e6) / ADC_DECIMATION, data)
+        set_freq_metadata(freq_hz, data)
+        logging.info(f"ADC mixer and metadata updated to {freq_mhz:.2f} MHz")
+    except Exception as e:
+        logging.error(f"Failed to update full ADC mixer configuration: {e}")
+
+
+def set_sample_rate(sample_rate, data):
+    data.f_s = sample_rate
+    sample_rate_raw = sample_rate * ADC_DECIMATION
+    logging.info(f"Setting sample rate metadata to: {sample_rate_raw}")
+    for ch in data.channels:
+        getattr(
+            data.ol, f"adc_to_udp_stream_{ch}"
+        ).register_map.SAMPLE_RATE_NUMERATOR_LSB = sample_rate_raw
+
+
+def set_freq_metadata(f_c_hz, data):
+    data.f_c_hz = float(f_c_hz)
+    f_c_khz = int(round(data.f_c_hz / 1e3))
+    logging.info(f"Setting frequency metadata to: {f_c_khz} kHz")
+    for ch in data.channels:
+        getattr(data.ol, f"adc_to_udp_stream_{ch}").register_map.FREQUENCY_IDX = f_c_khz
+
+
+def set_channel_ctrl(ctrl, data):
+    for ch in data.channels:
+        getattr(data.ol, f"adc_to_udp_stream_{ch}").register_map.CTRL = ctrl.value
+    data.state = (
+        "active" if ctrl in [Ctrl.CAPTURE, Ctrl.CAPTURE_NEXT_PPS] else "inactive"
+    )
+
+
+def capture_now(data):
+    set_channel_ctrl(Ctrl.RESET, data)
+    for ch in data.channels:
+        stream = getattr(data.ol, f"adc_to_udp_stream_{ch}")
+        stream.register_map.SAMPLE_IDX_OFFSET_LSB = 0
+        stream.register_map.SAMPLE_IDX_OFFSET_MSB = 0
+    set_channel_ctrl(Ctrl.CAPTURE, data)
+
+
+def capture_next_pps(data):
+    set_channel_ctrl(Ctrl.RESET, data)
+    data.pps_count = 0
+    current_time = time.time()
+    while (current_time - int(current_time)) > 0.5:
+        time.sleep(0.1)
+        current_time = time.time()
+    time.sleep(0.1)
+    current_time_s = int(current_time) + 1
+    samples_since_epoch = int(current_time_s * data.f_s)
+    lsb = samples_since_epoch & 0xFFFFFFFF
+    msb = samples_since_epoch >> 32
+    for ch in data.channels:
+        stream = getattr(data.ol, f"adc_to_udp_stream_{ch}")
+        stream.register_map.SAMPLE_IDX_OFFSET_LSB = lsb
+        stream.register_map.SAMPLE_IDX_OFFSET_MSB = msb
+    set_channel_ctrl(Ctrl.CAPTURE_NEXT_PPS, data)
+
+
+def run(args):
+    """
+    Main function for the RX capture script
+
+    Args:
+        args (argparse.Namespace): Command-line arguments.
+
+    """
+    global exit_flag, data
+    os.makedirs(LOG_DIR, exist_ok=True)
+    log_filename = f"rfsoc_capture_{time.strftime('%Y%m%d_%H%M%S')}.log"
+    logging.basicConfig(
+        level=args.log_level,
+        format="%(asctime)s - %(levelname)s - %(message)s",
+        filename=os.path.join(LOG_DIR, log_filename),
+    )
+    console = logging.StreamHandler()
+    console.setLevel(args.log_level)
+    logging.getLogger().addHandler(console)
+
+    logging.info(
+        f"Starting RF capture on ADC Channel {BLUE}{args.channels}{RESET} at {BLUE}{args.freq:.3f} MHz{RESET}"
+    )
+    data.f_if_hz = args.freq * 1e6
+    data.pps_count = 0
+
+    # Setup MQTT client
+    mqtt_client = mqtt.Client(client_id=service_name)
+    mqtt_client.on_message = on_message
+    mqtt_client.will_set(
+        service_name + "/status",
+        payload=json.dumps({"state": "offline"}),
+        qos=0,
+        retain=True,
+    )
+    mqtt_client.connect(MQTT_BROKER, MQTT_PORT, 60)
+    mqtt_client.subscribe(MQTT_CMD_TOPIC)
+    mqtt_client.loop_start()
+    data.mqtt_client = mqtt_client
+
+    mqtt_client.publish(
+        service_name + "/status",
+        payload=json.dumps({"state": "online"}),
+        qos=0,
+        retain=True,
+    )
+
+    # Initialize RFSoC Overlay
+    logging.info("Initializing RFSoC 10G Overlay")
+    bitfile_path = get_bitfile_path()
+    print(f"Opening Overlay with bitfile: {bitfile_path}")
+    data.ol = SDROverlay(bitfile_name=bitfile_path, ignore_version=True)
+
+    # Wait for overlay to initialize
+    time.sleep(5)
+
+    # Configure clock
+    data.ol.configure_clock("internal" if args.internal_clock else "external")
+
+    # Configure optional DAC0 TX tone. RX setup still proceeds normally.
+    configure_tx(args, data)
+
+    # Seed TX state from CLI args for MQTT status
+    data.tx_channels = resolve_tx_channels(args)
+    data.tx_center_freq = args.tx_center_freq
+    data.tx_offset_freq = (
+        TX_DEFAULT_OFFSET_FREQ_MHZ
+        if args.tx_offset_freq is None
+        else float(args.tx_offset_freq)
+    )
+    data.tx_amplitude_bins = (
+        TX_DEFAULT_AMPLITUDE_BINS if args.tx_amplitude is None else int(args.tx_amplitude)
+    )
+
+    # Set active channels
+    data.channels = ALL_CHANNELS
+    set_channel_ctrl(Ctrl.RESET, data)
+    data.channels = args.channels
+
+    # Apply initial ADC config
+    update_adc_nco(args.freq, data)
+
+    # Start Capture
+    if not args.reset:
+        if args.internal_clock:
+            capture_now(data)
+        else:
+            capture_next_pps(data)
+
+    pps_count_last = 0
+    try:
+        while not exit_flag:
+            time.sleep(0.1)
+            pps = max(
+                int(data.ol.adc_to_udp_stream_A.register_map.PPS_COUNTER),
+                int(data.ol.adc_to_udp_stream_B.register_map.PPS_COUNTER),
+                int(data.ol.adc_to_udp_stream_C.register_map.PPS_COUNTER),
+                int(data.ol.adc_to_udp_stream_D.register_map.PPS_COUNTER),
+            )
+            if pps > pps_count_last:
+                data.pps_count = pps
+                pps_count_last = pps
+    finally:
+        for channel in TX_CHANNEL_CONFIG:
+            try:
+                configure_tx_function_generator(channel, None, None, data)
+            except Exception as e:
+                logging.warning(
+                    "Failed to disable TX channel %s function generator: %s",
+                    channel,
+                    e,
+                )
+        mqtt_client.loop_stop()
+
+    logging.info("Exiting and resetting channels.")
+    data.channels = ALL_CHANNELS
+    set_channel_ctrl(Ctrl.RESET, data)
+
+
+def main():
+    for sig in [
+        signal.SIGINT,
+        signal.SIGTERM,
+        signal.SIGHUP,
+        signal.SIGQUIT,
+        signal.SIGABRT,
+    ]:
+        signal.signal(sig, signal_handler)
+
+    parser = argparse.ArgumentParser(description="Tune RFSoC and stream data over QSFP")
+    parser.add_argument(
+        "-f", "--freq", type=float, default=ADC_IF, help="IF/NCO frequency in MHz"
+    )
+    parser.add_argument(
+        "-c",
+        "--channels",
+        type=str,
+        nargs="*",
+        choices=ALL_CHANNELS,
+        default=["A"],
+        help="Channels to capture",
+    )
+    parser.add_argument(
+        "-r",
+        "--reset",
+        action="store_true",
+        help="Start with ADC capture held in reset",
+    )
+    parser.add_argument(
+        "-i",
+        "--internal_clock",
+        action="store_true",
+        help="Use internal clock instead of external ref",
+    )
+    parser.add_argument(
+        "--tx-channel",
+        type=str,
+        default=None,
+        choices=TX_CHANNEL_CHOICES,
+        help="TX DAC output channel: A, B, A,B, or None (disable all); defaults to A",
+    )
+    parser.add_argument(
+        "--tx-center-freq",
+        type=float,
+        default=None,
+        help="Set selected TX DAC RFDC mixer/NCO center frequency in MHz",
+    )
+    parser.add_argument(
+        "--tx-offset-freq",
+        type=float,
+        default=None,
+        help=(
+            "Selected TX DAC function-generator baseband offset frequency in MHz; "
+            "defaults to 0 when TX is otherwise requested"
+        ),
+    )
+    parser.add_argument(
+        "--tx-amplitude",
+        type=int,
+        default=None,
+        help="TX waveform peak amplitude in signed 14-bit DAC bins, 0..8191",
+    )
+    parser.add_argument(
+        "--log-level",
+        "-l",
+        type=str,
+        default="INFO",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+    )
+    args = parser.parse_args()
+
+    try:
+        f = open(LOCK_FILE, "w")
+    except PermissionError:
+        print(f"Permission denied. Try running as root to write to {LOCK_FILE}")
+        sys.exit(1)
+
+    try:
+        # 2. Try to acquire an EXCLUSIVE lock (LOCK_EX) without blocking (LOCK_NB)
+        fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+        # 3. Best Practice: Write the process PID into the file for debugging
+        f.write(str(os.getpid()))
+        f.flush()
+    except BlockingIOError:
+        print("Another instance of this script is already running!")
+        sys.exit(1)
+
+    run(args)
+
+    fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+    f.close()
+    os.remove(LOCK_FILE)
+
+
+if __name__ == "__main__":
+    main()

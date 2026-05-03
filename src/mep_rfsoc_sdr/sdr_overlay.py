@@ -37,3 +37,32 @@ class SDROverlay(Overlay):
         adc_tile.blocks[block].MixerSettings = mixer
         adc_tile.blocks[block].UpdateEvent(xrfdc.EVENT_MIXER)
         adc_tile.SetupFIFO(True)
+
+    def set_dac_nco(self, f_c_mhz, f_s_mhz, tile, block):
+        """Set the DAC NCO frequency"""
+        f_c_mhz = float(f_c_mhz)
+        f_s_mhz = float(f_s_mhz)
+        pll_freq = 491.52  # MHz — assumed static LMX freq
+
+        mixer = {
+            "CoarseMixFreq": xrfdc.COARSE_MIX_BYPASS,
+            "EventSource": xrfdc.EVNT_SRC_TILE,
+            "FineMixerScale": xrfdc.MIXER_SCALE_1P0,
+            "Freq": f_c_mhz,
+            "MixerMode": xrfdc.MIXER_MODE_C2R,
+            "MixerType": xrfdc.MIXER_TYPE_FINE,
+            "PhaseOffset": 0.0,
+        }
+
+        dac_tile = self.rfdc.dac_tiles[tile]
+        dac_tile.DynamicPLLConfig(1, pll_freq, f_s_mhz)
+        dac_tile.blocks[block].NyquistZone = self._nyquist_zone(f_c_mhz, f_s_mhz)
+        dac_tile.blocks[block].MixerSettings = mixer
+        dac_tile.blocks[block].UpdateEvent(xrfdc.EVENT_MIXER)
+
+    @staticmethod
+    def _nyquist_zone(f_c_mhz, f_s_mhz):
+        half_sample_rate = f_s_mhz / 2.0
+        if half_sample_rate <= 0:
+            raise ValueError("Sample rate must be greater than 0 MHz")
+        return 2 if abs(f_c_mhz) > half_sample_rate else 1

@@ -20,16 +20,40 @@ git clone --recursive https://github.com/spectrumx/mep-rfsoc-sdr.git
 cd mep-rfsoc-sdr
 ```
 
-Then install the package:
+Then build and install the package:
 ```bash
-pip3 install . -v
+sudo `which python` -m pip install --upgrade pip build
+sudo `which python` -m build
+sudo `which python` -m pip install . -v
 ```
 
-The bitstream and hardware description files are not included in the repo by default and must be copied from the release page at: https://github.com/spectrumx/mep-rfsoc-sdr/releases
+The bitstream and hardware description files are not included in the repo by default. The build hook fetches the official files from the release page at: https://github.com/spectrumx/mep-rfsoc-sdr/releases into `dist/bitstream` and includes those files in the installed package. To override the official files, manually place `sdr_bitstream.bit` and `sdr_bitstream.hwh` in `src/bitstream`, then rerun the build and install commands above. The build hook will copy those user-provided files into `dist/bitstream` and include them in the installed package.
 
 ## Receiving Data
 
-The SDR image streams captured RF data over a UDP connection. I/Q data is sent in interleaved packets with a header providing timing and frequency information. This data stream can be received and parsed by utilties in the [mep-examples](https://github.com/spectrumx/mep-examples) repository. 
+The SDR image streams captured RF data over a UDP connection. I/Q data is sent in interleaved packets with a header providing timing and frequency information. Telemetry and commands are optionally sent over MQTT. This data stream can be received and parsed by utilties in the [mep-examples](https://github.com/spectrumx/mep-examples) repository. 
+
+To launch the UDP streaming script on the RFSoC 4x2, run:
+
+```bash
+sudo -E `which python` -m mep_rfsoc_sdr.start_capture_rx
+```
+
+The script configures the RFSoC overlay, tunes the ADC NCO, starts UDP streaming, and optionally enables a DAC transmit tone from the function-generator IP. If MQTT control is not available, command line flags can be used to set the default configuration:
+
+Command line options:
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `-f`, `--freq` | `1090` | ADC IF/NCO frequency in MHz. |
+| `-c`, `--channels` | `A` | ADC capture channels to stream. Valid channels are `A`, `B`, `C`, and `D`. |
+| `-r`, `--reset` | disabled | Load and configure the overlay, but leave ADC capture held in reset. |
+| `-i`, `--internal_clock` | external ref | Use the internal clock configuration instead of an external reference. |
+| `--tx-channel` | `A` | DAC output channel for the TX tone: `A`, `B`, `A,B`, or `None`. |
+| `--tx-center-freq` | unset | RFDC DAC mixer/NCO center frequency in MHz for selected TX channel(s). |
+| `--tx-offset-freq` | unset | Function-generator baseband offset frequency in MHz. If TX is otherwise requested, defaults to `0`. Must be less than `32 MHz` in magnitude. |
+| `--tx-amplitude` | `8191` | TX waveform peak amplitude in signed 14-bit DAC bins, `0..8191`. |
+| `-l`, `--log-level` | `INFO` | Python logging level. |
 
 ## Vivado build guide
 
@@ -45,7 +69,7 @@ Initialize and build the Vivado project:
 cd boards/RFSoC4x2/mep-sdr
 init_design.bash --build
 ```
-To only initialize the project, run init_design.bash without the build flag. This will create the Vivado project and instantiate the block design. The block design can then be manually opened in Vivado. 
+To only initialize the project, run init_design.bash without the build flag. This will create the Vivado project and instantiate the block design. The block design can then be manually opened in Vivado.
 
 ```bash
 vivado mep-sdr.xdc

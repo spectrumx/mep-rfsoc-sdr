@@ -1,0 +1,883 @@
+////////////////////////////////////////////////////////////////////////////////
+// function_gen_to_dac_v1.0.v
+//
+// Function Generator to RF-DAC Block
+//
+// Generates sine/cosine waveforms and outputs them to an RF-DAC via AXI4-Stream.
+//
+// RFDC stream contract:
+//   - m00_axis_tdata: 64 bits (4 signed 16-bit words)
+//   - 4 words per beat = 2 interleaved complex samples (I0,Q0,I1,Q1)
+//   - m00_axis_aclk: 32 MHz AXIS beat clock
+//   - Logical complex sample rate: 64 MSPS
+//   - DAC sampling rate: 1024 MSPS, interpolation: 16
+//   - One beat emitted every AXIS clock cycle when enabled
+//
+// Implementation: 2 lut_waveform_gen instances, each advancing 2 phase steps
+// per clock (SAMPLES_PER_CLOCK=2), with signed phase_step_offset 0..+/-1 to produce
+// 2 consecutive samples from one beat.
+//
+// Startup: a 2-cycle pipeline flush ensures the first accepted beat contains
+// two distinct consecutive samples, not stale reset-state values.
+//
+// Backpressure: under backpressure (tvalid && !tready), the waveform generators
+// continue advancing internally. Dropped samples cause the output waveform to
+// jump in phase when streaming resumes. This preserves wall-clock phase
+// continuity at the cost of sample continuity during stalls.
+//
+////////////////////////////////////////////////////////////////////////////////
+
+`timescale 1 ns / 1 ps
+
+module function_gen_to_dac_1_0 #
+(
+    // AXI4-Lite slave bus parameters
+    parameter integer C_S00_AXI_DATA_WIDTH    = 32,
+    parameter integer C_S00_AXI_ADDR_WIDTH    = 7,
+
+    // RFDC DAC AXI4-Stream master bus parameters
+    parameter integer C_M00_AXIS_TDATA_WIDTH  = 64
+)
+(
+    // Ports of Axi Slave Bus Interface S00_AXI
+    input wire  s00_axi_aclk,
+    input wire  s00_axi_aresetn,
+    input wire [C_S00_AXI_ADDR_WIDTH-1 : 0] s00_axi_awaddr,
+    input wire [2 : 0] s00_axi_awprot,
+    input wire  s00_axi_awvalid,
+    output wire  s00_axi_awready,
+    input wire [C_S00_AXI_DATA_WIDTH-1 : 0] s00_axi_wdata,
+    input wire [(C_S00_AXI_DATA_WIDTH/8)-1 : 0] s00_axi_wstrb,
+    input wire  s00_axi_wvalid,
+    output wire  s00_axi_wready,
+    output wire [1 : 0] s00_axi_bresp,
+    output wire  s00_axi_bvalid,
+    input wire  s00_axi_bready,
+    input wire [C_S00_AXI_ADDR_WIDTH-1 : 0] s00_axi_araddr,
+    input wire [2 : 0] s00_axi_arprot,
+    input wire  s00_axi_arvalid,
+    output wire  s00_axi_arready,
+    output reg [C_S00_AXI_DATA_WIDTH-1 : 0] s00_axi_rdata,
+    output wire [1 : 0] s00_axi_rresp,
+    output wire  s00_axi_rvalid,
+    input wire  s00_axi_rready,
+
+    // Ports of RFDC DAC AXI4-Stream Master M00_AXIS
+    input wire m00_axis_aclk,
+    input wire m00_axis_aresetn,
+    output wire m00_axis_tvalid,
+    output wire [C_M00_AXIS_TDATA_WIDTH-1 : 0] m00_axis_tdata,
+    input wire m00_axis_tready
+);
+
+    // RFDC stream localparams
+    localparam integer WORD_WIDTH              = 16;
+    localparam integer WORDS_PER_BEAT          = 4;
+    localparam integer COMPLEX_SAMPLES_PER_BEAT = 2;
+
+    // Logical sample rate for the NCO (64 MSPS)
+    localparam integer LOGICAL_SAMPLE_RATE     = 64000000;
+
+    // Phase accumulator width (must match lut_waveform_gen)
+    localparam integer PHASE_WIDTH             = 32;
+
+    // Saturation helper: clamp a signed value to [-8192, +8191].
+    // Used when intermediate amplitude/offset math is wider than 14 bits.
+    function automatic signed [13:0] sat_to_signed_14(
+        input signed [31:0] v
+    );
+        reg signed [15:0] sat_max16;
+        reg signed [15:0] sat_min16;
+        begin
+            sat_max16 = 16'd8191;
+            sat_min16 = -16'd8192;
+            if      (v > sat_max16) sat_to_signed_14 = sat_max16[13:0];
+            else if (v < sat_min16) sat_to_signed_14 = sat_min16[13:0];
+            else                    sat_to_signed_14 = v[13:0];
+        end
+    endfunction
+
+    // Convert a signed 14-bit LUT sample to a signed 16-bit MSB-aligned RF-DAC word.
+    // Applies amplitude scaling (Q15 fixed-point, amplitude[15:0]) and signed 14-bit offset,
+    // saturates to [-8192, +8191], then shifts left by 2 bits.
+    // Amplitude: Q15 signed fixed-point, range [0, 0x7FFF] (0 = mute, 0x7FFF ~= 1.0 full scale).
+    // Offset: signed 14-bit value from cfg_dac_offset[13:0], range [-8192, +8191].
+    // Formula: scaled = (sample * amplitude) >>> 15 + offset; result = saturate(scaled) * 4;
+    function automatic signed [15:0] dac_word_from_sample(
+        input signed [13:0] sample,
+        input [15:0] amplitude,
+        input signed [13:0] offset
+    );
+        reg [13:0] sample_mag14;
+        reg sample_sign;
+        reg [31:0] scaled_mag;
+        reg signed [31:0] scaled_signed;
+        reg signed [31:0] offset_ext;
+        reg signed [31:0] with_offset;
+        reg signed [31:0] sat_val32;
+        reg signed [31:0] sat_max;
+        reg signed [31:0] sat_min;
+
+        begin
+            // Handle sign separately to avoid signed multiplication issues
+            sample_sign = sample[13];
+            if (sample_sign && sample !== 14'd8192) begin
+                sample_mag14 = -sample;
+            end else if (sample === 14'd8192) begin
+                sample_mag14 = 14'd8192; // |-8192| = 8192
+            end else begin
+                sample_mag14 = sample[13:0];
+            end
+
+            // Unsigned magnitude * amplitude, then / 32768 (with rounding)
+            scaled_mag = (sample_mag14 * amplitude + 16'd16384) >>> 15;
+
+            // Re-apply sign
+            if (sample_sign) begin
+                scaled_signed = -($signed(scaled_mag));
+            end else begin
+                scaled_signed = $signed(scaled_mag);
+            end
+
+            // Explicit sign-extension of offset
+            offset_ext = {{18{offset[13]}}, offset};
+
+            // Add offset
+            with_offset = scaled_signed + offset_ext;
+
+            // Saturate to [-8192, +8191]
+            sat_max = 32'd8191;
+            sat_min = -32'd8192;
+            if      (with_offset > sat_max) sat_val32 = sat_max;
+            else if (with_offset < sat_min) sat_val32 = sat_min;
+            else                            sat_val32 = with_offset;
+
+            // Shift left 2 bits for MSB-aligned 16-bit output
+            dac_word_from_sample = sat_val32 * 4;
+        end
+    endfunction
+
+    // Legacy wrapper: convert without amplitude/offset (full scale, zero offset).
+    // Used by testbench unit tests that mirror DUT functions.
+    function automatic signed [15:0] dac_word_from_sample_legacy(
+        input signed [13:0] sample
+    );
+        dac_word_from_sample_legacy = sat_to_signed_14(sample) * 4;
+    endfunction
+
+    function automatic [13:0] sample_magnitude_14(
+        input signed [13:0] sample
+    );
+        begin
+            if (sample[13] && sample !== 14'd8192) begin
+                sample_magnitude_14 = -sample;
+            end else if (sample === 14'd8192) begin
+                sample_magnitude_14 = 14'd8192;
+            end else begin
+                sample_magnitude_14 = sample[13:0];
+            end
+        end
+    endfunction
+
+    function automatic signed [15:0] scaled_word_from_product(
+        input [29:0] product,
+        input sample_sign,
+        input signed [13:0] offset
+    );
+        reg [30:0] rounded_mag;
+        reg signed [31:0] scaled_signed;
+        reg signed [31:0] offset_ext;
+        reg signed [31:0] with_offset;
+        reg signed [13:0] sat_sample;
+        begin
+            rounded_mag = ({1'b0, product} + 31'd16384) >> 15;
+
+            if (sample_sign) begin
+                scaled_signed = -$signed({1'b0, rounded_mag});
+            end else begin
+                scaled_signed = $signed({1'b0, rounded_mag});
+            end
+
+            offset_ext = {{18{offset[13]}}, offset};
+            with_offset = scaled_signed + offset_ext;
+            sat_sample = sat_to_signed_14(with_offset);
+            scaled_word_from_product = {sat_sample, 2'b00};
+        end
+    endfunction
+
+    // Step 2.4.3: Byte-lane merge helper for WSTRB-aware writes.
+    // Merges new_value into old_value per byte-lane strobes in wstrb.
+    // WSTRB[0] -> [7:0], WSTRB[1] -> [15:8], WSTRB[2] -> [23:16], WSTRB[3] -> [31:24].
+    // WSTRB=4'b0000 leaves old_value unchanged.
+    function automatic [31:0] apply_wstrb;
+        input [31:0] old_value;
+        input [31:0] new_value;
+        input [3:0]  wstrb;
+        begin
+            apply_wstrb[7:0]   = wstrb[0] ? new_value[7:0]   : old_value[7:0];
+            apply_wstrb[15:8]  = wstrb[1] ? new_value[15:8]  : old_value[15:8];
+            apply_wstrb[23:16] = wstrb[2] ? new_value[23:16] : old_value[23:16];
+            apply_wstrb[31:24] = wstrb[3] ? new_value[31:24] : old_value[31:24];
+        end
+    endfunction
+
+  // Function generator control registers (AXI-domain shadow registers)
+    //
+    // CDC BOUNDARY WARNING (Step 2.5):
+    // The following multi-bit shadow registers are written in the AXI4-Lite
+    // clock domain (s00_axi_aclk) by the AXI write logic below, but are
+    // consumed directly in the DAC stream clock domain (m00_axis_aclk) by
+    // the LUT generators, output packing, and startup guard logic. This
+    // creates an unsafe cross-clock-domain (CDC) path: multi-bit values
+    // read across clock domains without synchronization can metastabilize
+    // or present torn values (where some bits reflect the old value and
+    // other bits reflect the new value).
+    //
+    // AXI4-Lite write domain:  s00_axi_aclk (156.25 MHz typical)
+    // DAC stream consume domain: m00_axis_aclk (32 MHz)
+    //
+    // Shadow registers are written in AXI domain and read back by AXI4-Lite master.
+    // They are NOT consumed by the DAC stream datapath (Step 2.5.5).
+    // The DAC stream consumes cfg_dac_* registers, which are captured from
+    // cfg_pub_* via CDC handshake (Step 2.5.4) in the m00_axis_aclk domain.
+    //
+    reg [31:0] waveform_type_shadow;
+    reg [31:0] frequency_shadow;
+    reg [31:0] amplitude_shadow;
+    reg [31:0] phase_shadow;
+    reg [31:0] offset_shadow;
+    reg [31:0] enable_shadow;
+
+    // Step 2.5.3: AXI-domain publish bundle and dirty/pending bookkeeping
+    // These registers form a stable AXI-domain bundle for CDC transfer to cfg_dac_*.
+    //
+    // Publish registers hold one in-flight config bundle. On the first write
+    // when no request is pending, the full post-write shadow state is loaded
+    // into cfg_pub_*. Subsequent writes while a request is pending only set
+    // cfg_dirty. On acknowledgment, if dirty the latest shadow state is
+    // re-published with a new toggle; if clean the pending flag clears.
+
+    // Publish bundle (AXI domain)
+    reg [31:0] cfg_pub_waveform_type;
+    reg [31:0] cfg_pub_frequency;
+    reg [31:0] cfg_pub_amplitude;
+    reg [31:0] cfg_pub_phase;
+    reg [31:0] cfg_pub_offset;
+    reg [31:0] cfg_pub_enable;
+
+    // Bookkeeping (AXI domain)
+    reg  cfg_req_toggle;
+    reg  cfg_req_pending;
+    reg  cfg_dirty;
+
+    // Step 2.5.4/2.5.5: DAC-domain config registers
+    // These are the ONLY config registers consumed by the stream datapath.
+    // Updated via CDC-safe handshake from AXI-domain publish bundle (cfg_pub_*).
+
+    reg [31:0] cfg_dac_waveform_type;
+    reg [31:0] cfg_dac_frequency;
+    reg [31:0] cfg_dac_amplitude;
+    reg [31:0] cfg_dac_phase;
+    reg [31:0] cfg_dac_offset;
+    reg [31:0] cfg_dac_enable;
+
+    // Step 2.5.4: CDC synchronizers
+    // AXI->DAC: 2-flop synchronizer for cfg_req_toggle
+    reg  cfg_req_toggle_sync1;
+    reg  cfg_req_toggle_sync2;
+
+    // DAC->AXI: 2-flop synchronizer for cfg_ack_toggle
+    reg  cfg_ack_toggle;
+    reg  cfg_ack_toggle_sync1;
+    reg  cfg_ack_toggle_sync2;
+
+    // Next-shadow regs: computed combinatorially after pending declarations.
+    // (Declared here, assigned in always @(*) block near AXI write logic.)
+    reg [31:0] next_waveform_type;
+    reg [31:0] next_frequency;
+    reg [31:0] next_amplitude;
+    reg [31:0] next_phase;
+    reg [31:0] next_offset;
+    reg [31:0] next_enable;
+
+    // FREQUENCY is interpreted as a signed two's-complement value in Hz.
+    // Raw register bits are preserved for AXI readback; sign/magnitude are
+    // derived only for phase-step sizing and direction.
+    wire signed [31:0] cfg_dac_frequency_signed;
+    wire cfg_dac_frequency_negative;
+    wire [31:0] cfg_dac_frequency_abs;
+    wire [63:0] cfg_dac_frequency_abs_64;
+
+    assign cfg_dac_frequency_signed = $signed(cfg_dac_frequency);
+    assign cfg_dac_frequency_negative = cfg_dac_frequency_signed < 0;
+    assign cfg_dac_frequency_abs = cfg_dac_frequency_negative ?
+        (~cfg_dac_frequency + 32'd1) : cfg_dac_frequency;
+    assign cfg_dac_frequency_abs_64 = {32'd0, cfg_dac_frequency_abs};
+
+    // Per-sample phase increment: abs(freq) * 2^PHASE_WIDTH / LOGICAL_SAMPLE_RATE
+    wire [63:0] phase_inc_64;
+    wire [31:0] phase_inc;
+    assign phase_inc_64 = (cfg_dac_frequency_abs_64 * (64'd1 << PHASE_WIDTH)) / LOGICAL_SAMPLE_RATE;
+    assign phase_inc = phase_inc_64[PHASE_WIDTH-1:0];
+
+    // Phase step offsets for samples 0..1
+    wire [31:0] phase_step0;
+    wire [31:0] phase_step1;
+    assign phase_step0 = 32'd0;
+    assign phase_step1 = cfg_dac_frequency_negative ? -phase_inc : phase_inc;
+
+    // Waveform generator outputs (signed 14-bit)
+    wire signed [13:0] sine0;
+    wire signed [13:0] cosine0;
+    wire signed [13:0] sine1;
+    wire signed [13:0] cosine1;
+
+    // Separate valid wires for each generator instance
+    wire valid0;
+    wire valid1;
+
+    // Sample 0: current phase
+    lut_waveform_gen #(
+        .CLOCK_FREQUENCY(LOGICAL_SAMPLE_RATE),
+        .PHASE_WIDTH(PHASE_WIDTH),
+        .DATA_WIDTH(14),
+        .LUT_ADDR_WIDTH(12),
+        .SAMPLES_PER_CLOCK(COMPLEX_SAMPLES_PER_BEAT)
+   ) u_wave0 (
+        .clk(m00_axis_aclk),
+          .rst_n(m00_axis_aresetn),
+          .frequency(cfg_dac_frequency_signed),
+          .phase_offset(cfg_dac_phase),
+          .phase_step_offset(phase_step0),
+          .en(cfg_dac_enable[0]),
+         .sine_out(sine0),
+         .cosine_out(cosine0),
+         .valid_out(valid0)
+    );
+
+    // Sample 1: phase + 1 step
+    lut_waveform_gen #(
+        .CLOCK_FREQUENCY(LOGICAL_SAMPLE_RATE),
+        .PHASE_WIDTH(PHASE_WIDTH),
+        .DATA_WIDTH(14),
+        .LUT_ADDR_WIDTH(12),
+        .SAMPLES_PER_CLOCK(COMPLEX_SAMPLES_PER_BEAT)
+   ) u_wave1 (
+      .clk(m00_axis_aclk),
+          .rst_n(m00_axis_aresetn),
+          .frequency(cfg_dac_frequency_signed),
+          .phase_offset(cfg_dac_phase),
+          .phase_step_offset(phase_step1),
+          .en(cfg_dac_enable[0]),
+         .sine_out(sine1),
+         .cosine_out(cosine1),
+         .valid_out(valid1)
+    );
+
+    // All generators share the same phase accumulator advancement, so
+    // their valid signals should all transition at the same time.
+    // Use valid0 as the representative pipeline-valid indicator.
+    wire all_valid;
+    assign all_valid = valid0 && valid1;
+
+    // Step 2.6: Waveform-type mode selection
+    //   0: zero output mode (tvalid=0)
+    //   1: sine/cosine tone mode (existing LUT datapath)
+    //   2: DC I/Q code mode (offset -> I, Q=0)
+    //   any other: zero output mode
+    wire zero_output_mode;
+    assign zero_output_mode = (cfg_dac_waveform_type !== 32'd1 && cfg_dac_waveform_type !== 32'd2);
+
+    // Startup guard: suppress tvalid for first 2 cycles after enable goes high.
+    // The LUT has a 2-cycle pipeline (lut_addr_reg latches current address,
+    // then outputs are read from the latched address). When enable transitions
+    // from 0 to 1, the first beat's LUT outputs may contain stale data from
+    // the disabled state. A 2-cycle delay after enable ensures the pipeline
+    // has flushed and both generators produce distinct consecutive samples.
+    reg enable_d1;
+    wire enable_rise;
+    reg [1:0] startup_count;
+    wire startup_ok;
+
+    assign enable_rise = cfg_dac_enable[0] && !enable_d1;
+
+    always @(posedge m00_axis_aclk or negedge m00_axis_aresetn) begin
+        if (!m00_axis_aresetn) begin
+            enable_d1 <= 1'b0;
+            startup_count <= 2'd0;
+        end else begin
+           enable_d1 <= cfg_dac_enable[0];
+            if (enable_rise) begin
+                startup_count <= 2'd0;
+            end else if (cfg_dac_enable[0] && startup_count < 2'd2) begin
+                startup_count <= startup_count + 1'b1;
+            end
+        end
+    end
+    assign startup_ok = (startup_count >= 2'd2);
+
+    // AXI4-Stream output
+    reg [C_M00_AXIS_TDATA_WIDTH-1:0] output_data;
+    reg output_valid;
+
+    assign m00_axis_tvalid = output_valid;
+    assign m00_axis_tdata  = output_data;
+
+    // DC I/Q mode: convert offset directly to RF-DAC word (ignoring amplitude).
+    // Signed 14-bit offset saturated to [-8192,+8191], shifted left 2 bits.
+    wire signed [15:0] dc_i_word;
+    wire signed [15:0] dc_q_word;
+    assign dc_i_word = sat_to_signed_14({{18{cfg_dac_offset[13]}}, cfg_dac_offset[13:0]}) * 4;
+    assign dc_q_word = 16'd0;
+
+    // Mode-1 DAC scaling pipeline. DSP-facing data registers intentionally
+    // avoid reset so Vivado can absorb them into DSP48 pipeline resources.
+    wire sine_mode_source_valid;
+    assign sine_mode_source_valid = (cfg_dac_waveform_type === 32'd1) &&
+                                    cfg_dac_enable[0] &&
+                                    startup_ok &&
+                                    all_valid;
+
+    reg [13:0] s0_mag0;
+    reg [13:0] s0_mag1;
+    reg [13:0] s0_mag2;
+    reg [13:0] s0_mag3;
+    reg s0_sign0;
+    reg s0_sign1;
+    reg s0_sign2;
+    reg s0_sign3;
+    reg [15:0] s0_amplitude;
+    reg signed [13:0] s0_offset;
+    reg s0_valid;
+
+    reg [29:0] s1_product0;
+    reg [29:0] s1_product1;
+    reg [29:0] s1_product2;
+    reg [29:0] s1_product3;
+    reg s1_sign0;
+    reg s1_sign1;
+    reg s1_sign2;
+    reg s1_sign3;
+    reg signed [13:0] s1_offset;
+    reg s1_valid;
+
+    reg [29:0] s2_product0;
+    reg [29:0] s2_product1;
+    reg [29:0] s2_product2;
+    reg [29:0] s2_product3;
+    reg s2_sign0;
+    reg s2_sign1;
+    reg s2_sign2;
+    reg s2_sign3;
+    reg signed [13:0] s2_offset;
+    reg s2_valid;
+
+    reg [29:0] s3_product0;
+    reg [29:0] s3_product1;
+    reg [29:0] s3_product2;
+    reg [29:0] s3_product3;
+    reg s3_sign0;
+    reg s3_sign1;
+    reg s3_sign2;
+    reg s3_sign3;
+    reg signed [13:0] s3_offset;
+    reg s3_valid;
+
+    always @(posedge m00_axis_aclk) begin
+        // Stage 0: sign/magnitude extraction and common config capture.
+        s0_mag0      <= sample_magnitude_14(sine0);
+        s0_mag1      <= sample_magnitude_14(cosine0);
+        s0_mag2      <= sample_magnitude_14(sine1);
+        s0_mag3      <= sample_magnitude_14(cosine1);
+        s0_sign0     <= sine0[13];
+        s0_sign1     <= cosine0[13];
+        s0_sign2     <= sine1[13];
+        s0_sign3     <= cosine1[13];
+        s0_amplitude <= cfg_dac_amplitude[15:0];
+        s0_offset    <= cfg_dac_offset[13:0];
+
+        // Stage 1: registered multiply products.
+        s1_product0 <= s0_mag0 * s0_amplitude;
+        s1_product1 <= s0_mag1 * s0_amplitude;
+        s1_product2 <= s0_mag2 * s0_amplitude;
+        s1_product3 <= s0_mag3 * s0_amplitude;
+        s1_sign0    <= s0_sign0;
+        s1_sign1    <= s0_sign1;
+        s1_sign2    <= s0_sign2;
+        s1_sign3    <= s0_sign3;
+        s1_offset   <= s0_offset;
+
+        // Stage 2: second product register stage for DSP48 MREG/PREG inference.
+        s2_product0 <= s1_product0;
+        s2_product1 <= s1_product1;
+        s2_product2 <= s1_product2;
+        s2_product3 <= s1_product3;
+        s2_sign0    <= s1_sign0;
+        s2_sign1    <= s1_sign1;
+        s2_sign2    <= s1_sign2;
+        s2_sign3    <= s1_sign3;
+        s2_offset   <= s1_offset;
+
+        // Stage 3: final product register stage for DSP48 output pipeline inference.
+        s3_product0 <= s2_product0;
+        s3_product1 <= s2_product1;
+        s3_product2 <= s2_product2;
+        s3_product3 <= s2_product3;
+        s3_sign0    <= s2_sign0;
+        s3_sign1    <= s2_sign1;
+        s3_sign2    <= s2_sign2;
+        s3_sign3    <= s2_sign3;
+        s3_offset   <= s2_offset;
+    end
+
+    // Valid/control path remains reset-safe and gates the resetless data stages.
+    always @(posedge m00_axis_aclk or negedge m00_axis_aresetn) begin
+        if (!m00_axis_aresetn) begin
+            output_data  <= {C_M00_AXIS_TDATA_WIDTH{1'b0}};
+            output_valid <= 1'b0;
+            s0_valid     <= 1'b0;
+            s1_valid     <= 1'b0;
+            s2_valid     <= 1'b0;
+            s3_valid     <= 1'b0;
+        end else begin
+            s0_valid <= sine_mode_source_valid;
+            s1_valid <= s0_valid;
+            s2_valid <= s1_valid;
+            s3_valid <= s2_valid;
+
+            // Step 2.6: waveform-type multiplexing
+            // Mode 1 (sine): pack 4 signed 16-bit RF-DAC words from 2 complex LUT samples.
+            // Mode 2 (DC): pack 2 repeated DC I/Q samples from offset register.
+            // Mode 0/other (zero): tdata holds last registered value; tvalid forced low.
+            if (cfg_dac_waveform_type === 32'd2 && cfg_dac_enable[0]) begin
+                output_data <= {
+                    dc_q_word, dc_i_word,
+                    dc_q_word, dc_i_word
+                };
+                output_valid <= 1'b1;
+            end else if (cfg_dac_waveform_type === 32'd1 &&
+                         cfg_dac_enable[0] &&
+                         s3_valid) begin
+                output_data <= {
+                    scaled_word_from_product(s3_product3, s3_sign3, s3_offset),   // word3  Q1
+                    scaled_word_from_product(s3_product2, s3_sign2, s3_offset),   // word2  I1
+                    scaled_word_from_product(s3_product1, s3_sign1, s3_offset),   // word1  Q0
+                    scaled_word_from_product(s3_product0, s3_sign0, s3_offset)    // word0  I0
+                };
+                output_valid <= 1'b1;
+            end else if (zero_output_mode || !cfg_dac_enable[0]) begin
+                output_valid <= 1'b0;
+            end else begin
+                output_valid <= 1'b0;
+            end
+        end
+    end
+
+  // Step 2.5.4: DAC-domain CDC synchronizer, edge detection, bundle capture, ack toggle
+    // Runs in m00_axis_aclk. Captures stable cfg_pub_* bundle on each
+    // synchronized request-toggle edge, then toggles cfg_ack_toggle back
+    // to the AXI domain.
+
+    // 2-flop synchronizer for cfg_req_toggle (AXI->DAC)
+    always @(posedge m00_axis_aclk or negedge m00_axis_aresetn) begin
+        if (!m00_axis_aresetn) begin
+            cfg_req_toggle_sync1 <= 1'b0;
+            cfg_req_toggle_sync2 <= 1'b0;
+        end else begin
+            cfg_req_toggle_sync1 <= cfg_req_toggle;
+            cfg_req_toggle_sync2 <= cfg_req_toggle_sync1;
+        end
+    end
+
+    // Edge detection: rising or falling edge on synchronized toggle
+    wire cfg_req_edge;
+    assign cfg_req_edge = cfg_req_toggle_sync1 !== cfg_req_toggle_sync2;
+
+    // DAC-domain bundle capture and ack toggle
+    always @(posedge m00_axis_aclk or negedge m00_axis_aresetn) begin
+        if (!m00_axis_aresetn) begin
+            cfg_dac_waveform_type <= 32'h0;
+            cfg_dac_frequency     <= 32'h0;
+            cfg_dac_amplitude     <= 32'h0;
+            cfg_dac_phase         <= 32'h0;
+            cfg_dac_offset        <= 32'h0;
+            cfg_dac_enable        <= 32'h0;
+            cfg_ack_toggle        <= 1'b0;
+        end else if (cfg_req_edge) begin
+            // Capture stable AXI-domain publish bundle into DAC domain
+            cfg_dac_waveform_type <= cfg_pub_waveform_type;
+            cfg_dac_frequency     <= cfg_pub_frequency;
+            cfg_dac_amplitude     <= cfg_pub_amplitude;
+            cfg_dac_phase         <= cfg_pub_phase;
+            cfg_dac_offset        <= cfg_pub_offset;
+            cfg_dac_enable        <= cfg_pub_enable;
+            // Toggle acknowledgment back to AXI domain
+            cfg_ack_toggle        <= ~cfg_ack_toggle;
+        end
+    end
+
+    // 2-flop synchronizer for cfg_ack_toggle (DAC->AXI)
+    always @(posedge s00_axi_aclk or negedge s00_axi_aresetn) begin
+        if (!s00_axi_aresetn) begin
+            cfg_ack_toggle_sync1 <= 1'b0;
+            cfg_ack_toggle_sync2 <= 1'b0;
+        end else begin
+            cfg_ack_toggle_sync1 <= cfg_ack_toggle;
+            cfg_ack_toggle_sync2 <= cfg_ack_toggle_sync1;
+        end
+    end
+
+    // Edge detection for synchronized ack toggle in AXI domain
+    wire cfg_ack_edge;
+    assign cfg_ack_edge = cfg_ack_toggle_sync1 !== cfg_ack_toggle_sync2;
+
+   // AXI4-Lite interface (hardened in Step 2.4)
+    //
+    // Register map (7-bit byte-addressable, little-endian):
+    //   7'h00: waveform_type_shadow  - Waveform type selection
+    //   7'h04: frequency_shadow      - Signed output frequency in Hz (two's complement)
+    //   7'h08: amplitude_shadow      - Amplitude (Q15 fixed-point, [15:0])
+    //   7'h0C: phase_shadow          - Phase offset (32-bit phase accumulator units)
+    //   7'h10: offset_shadow         - DC offset (signed 14-bit, [13:0])
+    //   7'h14: enable_shadow         - Streaming enable ([0])
+    //   All other addresses: read as 32'h0000_0000, writes are ignored
+    //
+    localparam [6:0] REG_WAVEFORM_TYPE = 7'h00;
+    localparam [6:0] REG_FREQUENCY     = 7'h04;
+    localparam [6:0] REG_AMPLITUDE     = 7'h08;
+    localparam [6:0] REG_PHASE         = 7'h0C;
+    localparam [6:0] REG_OFFSET        = 7'h10;
+    localparam [6:0] REG_ENABLE        = 7'h14;
+
+    assign s00_axi_bresp   = 2'b00;
+    assign s00_axi_rresp   = 2'b00;
+
+    // Step 2.4.2: Independent AW/W acceptance with pending registers
+    // Pending AW channel
+    reg  [C_S00_AXI_ADDR_WIDTH-1:0] pending_aw_addr;
+    reg  pending_aw;
+
+    // Pending W channel
+    reg  [C_S00_AXI_DATA_WIDTH-1:0] pending_w_data;
+    reg  [(C_S00_AXI_DATA_WIDTH/8)-1:0] pending_w_strb;
+    reg  pending_w;
+
+    // Step 2.5.3: Next-shadow combinational logic
+    // Computes post-write shadow values so the publish bundle sees the
+    // just-written value, not the pre-write value (avoids NBA ordering issues).
+    always @(*) begin
+        next_waveform_type = waveform_type_shadow;
+        next_frequency     = frequency_shadow;
+        next_amplitude     = amplitude_shadow;
+        next_phase         = phase_shadow;
+        next_offset        = offset_shadow;
+        next_enable        = enable_shadow;
+        if (pending_aw && pending_w) begin
+            case (pending_aw_addr[6:0])
+                REG_WAVEFORM_TYPE: next_waveform_type = apply_wstrb(waveform_type_shadow, pending_w_data, pending_w_strb);
+                REG_FREQUENCY:     next_frequency     = apply_wstrb(frequency_shadow,     pending_w_data, pending_w_strb);
+                REG_AMPLITUDE:     next_amplitude     = apply_wstrb(amplitude_shadow,     pending_w_data, pending_w_strb);
+                REG_PHASE:         next_phase         = apply_wstrb(phase_shadow,         pending_w_data, pending_w_strb);
+                REG_OFFSET:        next_offset        = apply_wstrb(offset_shadow,        pending_w_data, pending_w_strb);
+                REG_ENABLE:        next_enable        = apply_wstrb(enable_shadow,        pending_w_data, pending_w_strb);
+                default: ;
+            endcase
+        end
+    end
+
+    // Write response valid signal (declared before ready assigns)
+   reg bvalid_reg;
+    reg write_txn_triggered;
+
+    // AWREADY/WREADY: only accept when no pending channel and no pending response
+    assign s00_axi_awready = !pending_aw && !bvalid_reg;
+    assign s00_axi_wready  = !pending_w  && !bvalid_reg;
+
+     // Accept AW channel independently
+    always @(posedge s00_axi_aclk or negedge s00_axi_aresetn) begin
+        if (!s00_axi_aresetn) begin
+            pending_aw_addr <= {C_S00_AXI_ADDR_WIDTH{1'b0}};
+            pending_aw      <= 1'b0;
+        end else begin
+            if (s00_axi_awvalid && s00_axi_awready) begin
+                pending_aw_addr <= s00_axi_awaddr;
+                pending_aw      <= 1'b1;
+            end else if (bvalid_reg && s00_axi_bready) begin
+                pending_aw      <= 1'b0;
+            end
+        end
+    end
+
+    // Accept W channel independently
+    always @(posedge s00_axi_aclk or negedge s00_axi_aresetn) begin
+        if (!s00_axi_aresetn) begin
+            pending_w_data <= {C_S00_AXI_DATA_WIDTH{1'b0}};
+            pending_w_strb <= {(C_S00_AXI_DATA_WIDTH/8){1'b0}};
+            pending_w      <= 1'b0;
+        end else begin
+            if (s00_axi_wvalid && s00_axi_wready) begin
+                pending_w_data <= s00_axi_wdata;
+                pending_w_strb <= s00_axi_wstrb;
+                pending_w      <= 1'b1;
+            end else if (bvalid_reg && s00_axi_bready) begin
+                pending_w      <= 1'b0;
+            end
+        end
+    end
+
+  // Write response: assert BVALID when both AW and W are available (committed)
+    always @(posedge s00_axi_aclk or negedge s00_axi_aresetn) begin
+        if (!s00_axi_aresetn) begin
+            bvalid_reg <= 1'b0;
+        end else begin
+            if (pending_aw && pending_w && !bvalid_reg) begin
+                bvalid_reg <= 1'b1;
+            end else if (bvalid_reg && s00_axi_bready) begin
+                bvalid_reg <= 1'b0;
+            end
+        end
+    end
+
+    assign s00_axi_bvalid = bvalid_reg;
+
+    // Register write logic: commit when both AW and W are pending
+    // Step 2.4.3: WSTRB-aware byte-lane merge for all writable registers
+    // Step 2.5.3: uses next_* wires so publish bundle sees post-write values
+    always @(posedge s00_axi_aclk or negedge s00_axi_aresetn) begin
+        if (!s00_axi_aresetn) begin
+            waveform_type_shadow <= 32'h0;
+            frequency_shadow     <= 32'h0;
+            amplitude_shadow     <= 32'h0;
+            phase_shadow         <= 32'h0;
+            offset_shadow        <= 32'h0;
+            enable_shadow        <= 32'h0;
+        end else if (pending_aw && pending_w) begin
+            waveform_type_shadow <= next_waveform_type;
+            frequency_shadow     <= next_frequency;
+            amplitude_shadow     <= next_amplitude;
+            phase_shadow         <= next_phase;
+            offset_shadow        <= next_offset;
+            enable_shadow        <= next_enable;
+        end
+    end
+
+   // Step 2.5.3+2.5.4: Publish bundle and pending/dirty state machine (AXI domain)
+    // On first write with no pending request: load full publish bundle from
+    // next_* wires (post-write values), toggle cfg_req_toggle, set pending.
+    // On write while pending: set dirty, leave publish unchanged.
+    // On CDC ack edge while pending+dirty: reload publish from shadow,
+    // toggle again, clear dirty, stay pending.
+    // On CDC ack edge while pending+clean: clear pending.
+    // Register the write-transaction trigger one cycle early, so the publish
+    // fires on the cycle AFTER the write is accepted.  This gives subsequent
+    // writes a window to arrive and set cfg_dirty before the publish toggles
+    // cfg_req_toggle (coalescing window).
+    wire write_txn = pending_aw && pending_w && !bvalid_reg;
+
+    always @(posedge s00_axi_aclk or negedge s00_axi_aresetn) begin
+        if (!s00_axi_aresetn) begin
+            write_txn_triggered <= 1'b0;
+        end else begin
+            write_txn_triggered <= write_txn;
+        end
+    end
+
+    // Step 2.5.3+2.5.4: Publish bundle and pending/dirty state machine (AXI domain)
+    // On first write with no pending request: load full publish bundle from
+    // next_* wires (post-write values), toggle cfg_req_toggle, set pending.
+    // On write while pending: set dirty, leave publish unchanged.
+    // On CDC ack edge while pending+dirty: reload publish from shadow,
+    // toggle again, clear dirty, stay pending.
+    // On CDC ack edge while pending+clean: clear pending.
+    always @(posedge s00_axi_aclk or negedge s00_axi_aresetn) begin
+        if (!s00_axi_aresetn) begin
+            cfg_pub_waveform_type <= 32'h0;
+            cfg_pub_frequency     <= 32'h0;
+            cfg_pub_amplitude     <= 32'h0;
+            cfg_pub_phase         <= 32'h0;
+            cfg_pub_offset        <= 32'h0;
+            cfg_pub_enable        <= 32'h0;
+            cfg_req_toggle        <= 1'b0;
+            cfg_req_pending       <= 1'b0;
+            cfg_dirty             <= 1'b0;
+        end else begin
+            // CDC acknowledgment from DAC domain (Step 2.5.4)
+            if (cfg_ack_edge && cfg_req_pending) begin
+                if (cfg_dirty) begin
+                    // Coalesced: reload publish from latest shadow, toggle, stay pending
+                    cfg_pub_waveform_type <= waveform_type_shadow;
+                    cfg_pub_frequency     <= frequency_shadow;
+                    cfg_pub_amplitude     <= amplitude_shadow;
+                    cfg_pub_phase         <= phase_shadow;
+                    cfg_pub_offset        <= offset_shadow;
+                    cfg_pub_enable        <= enable_shadow;
+                    cfg_req_toggle        <= ~cfg_req_toggle;
+                    cfg_dirty             <= 1'b0;
+                end else begin
+                    // Clean ack: clear pending
+                    cfg_req_pending       <= 1'b0;
+                end
+            end else if (write_txn_triggered) begin
+                if (!cfg_req_pending) begin
+                    // First write (deferred one cycle): publish full bundle with post-write values
+                    cfg_pub_waveform_type <= waveform_type_shadow;
+                    cfg_pub_frequency     <= frequency_shadow;
+                    cfg_pub_amplitude     <= amplitude_shadow;
+                    cfg_pub_phase         <= phase_shadow;
+                    cfg_pub_offset        <= offset_shadow;
+                    cfg_pub_enable        <= enable_shadow;
+                    cfg_req_toggle        <= ~cfg_req_toggle;
+                    cfg_req_pending       <= 1'b1;
+                    cfg_dirty             <= 1'b0;
+                end else begin
+                    // Write while request pending: coalesce into dirty
+                    cfg_dirty             <= 1'b1;
+                end
+            end else if (write_txn && cfg_req_pending) begin
+                // Same-cycle coalescing: write arrives while pending, set dirty immediately
+                cfg_dirty <= 1'b1;
+            end
+        end
+    end
+
+    // Register read logic (Step 2.4.4 hardened)
+    // Latches ARADDR on acceptance, holds RVALID/RDATA/RRESP stable while !RREADY,
+    // and blocks new reads from overwriting a pending response.
+    reg  [C_S00_AXI_ADDR_WIDTH-1:0] araddr_latch;
+    reg  rvalid_reg;
+
+    // ARREADY: only accept when no read response is pending
+    assign s00_axi_arready = !rvalid_reg;
+
+    always @(posedge s00_axi_aclk or negedge s00_axi_aresetn) begin
+        if (!s00_axi_aresetn) begin
+            araddr_latch <= {C_S00_AXI_ADDR_WIDTH{1'b0}};
+            s00_axi_rdata <= 32'h0;
+            rvalid_reg    <= 1'b0;
+        end else begin
+            // Accept a new read request
+            if (s00_axi_arvalid && s00_axi_arready) begin
+                araddr_latch <= s00_axi_araddr;
+                case (s00_axi_araddr[6:0])
+                  REG_WAVEFORM_TYPE: s00_axi_rdata <= waveform_type_shadow;
+                  REG_FREQUENCY:     s00_axi_rdata <= frequency_shadow;
+                  REG_AMPLITUDE:     s00_axi_rdata <= amplitude_shadow;
+                  REG_PHASE:         s00_axi_rdata <= phase_shadow;
+                  REG_OFFSET:        s00_axi_rdata <= offset_shadow;
+                  REG_ENABLE:        s00_axi_rdata <= enable_shadow;
+                  default: s00_axi_rdata <= 32'h0;
+                endcase
+            end
+
+            // RVALID handshake: assert on read acceptance, deassert on RREADY
+            if (rvalid_reg && s00_axi_rready) begin
+                rvalid_reg <= 1'b0;
+            end else if (s00_axi_arvalid && s00_axi_arready) begin
+                rvalid_reg <= 1'b1;
+            end
+        end
+    end
+
+    assign s00_axi_rvalid = rvalid_reg;
+
+endmodule

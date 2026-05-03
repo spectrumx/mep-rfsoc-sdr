@@ -1,0 +1,41 @@
+[build-system]
+requires = ["hatchling", "hatch-vcs"]
+build-backend = "hatchling.build"
+
+[project]
+name = "mep_rfsoc_sdr"
+description = "MEP RFSoC SDR package for SpectrumX project"
+readme = "README.md"
+requires-python = ">=3.7"
+license = "BSD-3-Clause"
+dependencies = ["paho-mqtt", "pynq>=2.7"]
+dynamic = ["version"]
+
+[[project.authors]]
+name = "SpectrumX Development Team"
+email = "spectrumx@spectrumx.org"
+
+[project.urls]
+source = "https://github.com/spectrumx/mep-rfsoc-sdr.git"
+
+[project.scripts]
+start_capture_rx = "mep_rfsoc_sdr.start_capture_rx:main"
+
+[tool.hatch.build.hooks.custom]
+path = "get_bitstream.py"
+
+[tool.hatch.build.targets.sdist]
+only-include = ["src", "get_bitstream.py"]
+
+[tool.hatch.build.targets.sdist.hooks.vcs]
+version-file = "src/mep_rfsoc_sdr/_version.py"
+
+[tool.hatch.build.targets.wheel.force-include]
+"src/bitstream" = "mep_rfsoc_sdr/bitstream"
+"src/clk" = "/xrfclk"
+
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.version.raw-options]
+version_scheme = "only-version"
