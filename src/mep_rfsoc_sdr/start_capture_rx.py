@@ -44,6 +44,7 @@ TX_MAX_AMPLITUDE_BINS = 8191
 TX_DEFAULT_AMPLITUDE_BINS = 8191
 TX_DEFAULT_PHASE = 0
 TX_DEFAULT_OFFSET = 0
+TX_DEFAULT_OFFSET_FREQ_MHZ = 0.0
 TX_FREQUENCY_REG_BITS = 32
 TX_CHANNEL_CONFIG = {
     "A": {
@@ -83,7 +84,10 @@ class CaptureData:
         self.ol = None
         self.tx_channels = TX_DEFAULT_CHANNELS
         self.tx_center_freq = None
-        self.tx_offset_freq = 0.0
+        self.tx_offset_freq = TX_DEFAULT_OFFSET_FREQ_MHZ
+        self.tx_offset_freq_by_channel = {
+            channel: TX_DEFAULT_OFFSET_FREQ_MHZ for channel in TX_CHANNEL_CONFIG
+        }
         self.tx_amplitude_bins = TX_DEFAULT_AMPLITUDE_BINS
 
 
@@ -105,6 +109,7 @@ def send_status(data):
         "tx_channels": data.tx_channels,
         "tx_center_freq": data.tx_center_freq,
         "tx_offset_freq": data.tx_offset_freq,
+        "tx_offset_freq_by_channel": data.tx_offset_freq_by_channel,
         "tx_amplitude_bins": data.tx_amplitude_bins,
     }
     if data.mqtt_client:
@@ -179,6 +184,10 @@ def resolve_tx_amplitude_q15(args):
             f"--tx-amplitude must be in DAC bins 0..{TX_MAX_AMPLITUDE_BINS}"
         )
 
+    return tx_amplitude_bins_to_q15(amplitude_bins)
+
+
+def tx_amplitude_bins_to_q15(amplitude_bins):
     return int(round(amplitude_bins * 0x7FFF / TX_MAX_AMPLITUDE_BINS))
 
 
@@ -254,6 +263,7 @@ def configure_tx_function_generator(channel, tx_offset_mhz, tx_amplitude_q15, da
     regs.ENABLE = 0
 
     if tx_offset_mhz is None:
+        regs.AMPLITUDE = 0
         logging.info("TX channel %s function generator %s disabled", channel, gen_name)
         return
 
@@ -292,6 +302,7 @@ def configure_tx(args, data):
         return
 
     for channel in tx_channels:
+        data.tx_offset_freq_by_channel[channel] = tx_offset_mhz
         if args.tx_center_freq is not None:
             set_tx_dac_nco(
                 data.ol,
@@ -366,10 +377,9 @@ def on_message(client, userdata, msg):
                     )
                 else:
                     data.tx_offset_freq = tx_offset
-                    tx_amp_q15 = int(
-                        round(data.tx_amplitude_bins * 0x7FFF / TX_MAX_AMPLITUDE_BINS)
-                    )
+                    tx_amp_q15 = tx_amplitude_bins_to_q15(data.tx_amplitude_bins)
                     for ch in data.tx_channels:
+                        data.tx_offset_freq_by_channel[ch] = tx_offset
                         configure_tx_function_generator(ch, tx_offset, tx_amp_q15, data)
                     logging.info(f"TX offset frequency set to {tx_offset:.6f} MHz")
                 send_status(data)
@@ -381,10 +391,10 @@ def on_message(client, userdata, msg):
                     )
                 else:
                     data.tx_amplitude_bins = tx_amp
-                    tx_amp_q15 = int(round(tx_amp * 0x7FFF / TX_MAX_AMPLITUDE_BINS))
+                    tx_amp_q15 = tx_amplitude_bins_to_q15(tx_amp)
                     for ch in data.tx_channels:
                         configure_tx_function_generator(
-                            ch, data.tx_offset_freq, tx_amp_q15, data
+                            ch, data.tx_offset_freq_by_channel[ch], tx_amp_q15, data
                         )
                     logging.info(f"TX amplitude set to {tx_amp} DAC bins")
                 send_status(data)
@@ -394,16 +404,19 @@ def on_message(client, userdata, msg):
                         f"tx_channel must be one of {TX_CHANNEL_CHOICES}, got {set_value}"
                     )
                 else:
-                    new_channels = () if set_value == "None" else tuple(set_value.split(","))
-                    tx_amp_q15 = int(
-                        round(data.tx_amplitude_bins * 0x7FFF / TX_MAX_AMPLITUDE_BINS)
+                    new_channels = (
+                        () if set_value == "None" else tuple(set_value.split(","))
                     )
+                    tx_amp_q15 = tx_amplitude_bins_to_q15(data.tx_amplitude_bins)
                     for ch in TX_CHANNEL_CONFIG:
                         if ch not in new_channels:
                             configure_tx_function_generator(ch, None, None, data)
                         else:
                             configure_tx_function_generator(
-                                ch, data.tx_offset_freq, tx_amp_q15, data
+                                ch,
+                                data.tx_offset_freq_by_channel[ch],
+                                tx_amp_q15,
+                                data,
                             )
                     data.tx_channels = new_channels
                     logging.info(f"TX channels set to: {data.tx_channels}")
@@ -554,7 +567,11 @@ def run(args):
     # Seed TX state from CLI args for MQTT status
     data.tx_channels = resolve_tx_channels(args)
     data.tx_center_freq = args.tx_center_freq
-    data.tx_offset_freq = 0.0 if args.tx_offset_freq is None else float(args.tx_offset_freq)
+    data.tx_offset_freq = (
+        TX_DEFAULT_OFFSET_FREQ_MHZ
+        if args.tx_offset_freq is None
+        else float(args.tx_offset_freq)
+    )
     data.tx_amplitude_bins = (
         TX_DEFAULT_AMPLITUDE_BINS if args.tx_amplitude is None else int(args.tx_amplitude)
     )
