@@ -44,6 +44,7 @@ TX_MAX_AMPLITUDE_BINS = 8191
 TX_DEFAULT_AMPLITUDE_BINS = 8191
 TX_DEFAULT_PHASE = 0
 TX_DEFAULT_OFFSET = 0
+TX_FREQUENCY_REG_BITS = 32
 
 GREEN = "\033[92m"
 BLUE = "\033[94m"
@@ -152,6 +153,18 @@ def resolve_tx_amplitude_q15(args):
     return int(round(amplitude_bins * 0x7FFF / TX_MAX_AMPLITUDE_BINS))
 
 
+def encode_signed_frequency_hz(frequency_hz):
+    min_hz = -(1 << (TX_FREQUENCY_REG_BITS - 1))
+    max_hz = (1 << (TX_FREQUENCY_REG_BITS - 1)) - 1
+    if frequency_hz < min_hz or frequency_hz > max_hz:
+        raise ValueError(
+            f"TX offset frequency must fit signed {TX_FREQUENCY_REG_BITS}-bit Hz "
+            f"register ({min_hz}..{max_hz} Hz)"
+        )
+
+    return frequency_hz & ((1 << TX_FREQUENCY_REG_BITS) - 1)
+
+
 def tx_nyquist_zone(f_c_mhz, f_s_mhz):
     half_sample_rate = f_s_mhz / 2.0
     if half_sample_rate <= 0:
@@ -202,24 +215,21 @@ def configure_tx_function_generator(tx_offset_mhz, tx_amplitude_q15, data):
         return
 
     tx_offset_mhz = float(tx_offset_mhz)
-    tx_offset_hz = int(round(abs(tx_offset_mhz) * 1e6))
-    if tx_offset_mhz < 0:
-        logging.warning(
-            "Negative TX offset requested; current function_gen_to_dac has no "
-            "sideband-direction register, so programming offset magnitude only"
-        )
+    tx_offset_hz = int(round(tx_offset_mhz * 1e6))
+    tx_offset_reg = encode_signed_frequency_hz(tx_offset_hz)
 
     regs.WAVEFORM_TYPE = TX_WAVEFORM_SINE_COS
-    regs.FREQUENCY = tx_offset_hz
+    regs.FREQUENCY = tx_offset_reg
     regs.AMPLITUDE = tx_amplitude_q15
     regs.PHASE = TX_DEFAULT_PHASE
     regs.OFFSET = TX_DEFAULT_OFFSET
     regs.ENABLE = 1
     logging.info(
         "TX function generator enabled at signed offset %.6f MHz "
-        "(programmed magnitude %.6f MHz, amplitude Q15 0x%04X)",
+        "(programmed %d Hz as 0x%08X, amplitude Q15 0x%04X)",
         tx_offset_mhz,
-        tx_offset_hz / 1e6,
+        tx_offset_hz,
+        tx_offset_reg,
         tx_amplitude_q15,
     )
 

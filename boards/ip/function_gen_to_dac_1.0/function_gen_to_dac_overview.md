@@ -76,16 +76,16 @@ The HDL instantiates two `lut_waveform_gen` lanes. The second lane advances by o
 
 ## Register Map
 
-The current HDL and package metadata use compact byte offsets. These offsets are intentionally documented exactly as implemented.
+The current HDL and package metadata use conventional 32-bit word-aligned byte offsets.
 
 | Offset | Register | Use |
 |---:|---|---|
 | `0x00` | `WAVEFORM_TYPE` | `0` zero output, `1` sine/cosine, `2` DC I/Q. Other values produce zero output. |
-| `0x01` | `FREQUENCY` | Output frequency in Hz for sine/cosine mode. |
-| `0x02` | `AMPLITUDE` | Q15 amplitude scale. `0x0000` mutes waveform component, `0x7FFF` is near full scale. |
-| `0x03` | `PHASE` | 32-bit phase offset in phase-accumulator units. |
-| `0x04` | `OFFSET` | Signed 14-bit RF-DAC code in bits `[13:0]`; used as I in DC mode, with Q set to zero. |
-| `0x05` | `ENABLE` | Bit 0 enables stream output. |
+| `0x04` | `FREQUENCY` | Output frequency in Hz for sine/cosine mode. |
+| `0x08` | `AMPLITUDE` | Q15 amplitude scale. `0x0000` mutes waveform component, `0x7FFF` is near full scale. |
+| `0x0C` | `PHASE` | 32-bit phase offset in phase-accumulator units. |
+| `0x10` | `OFFSET` | Signed 14-bit RF-DAC code in bits `[13:0]`; used as I in DC mode, with Q set to zero. |
+| `0x14` | `ENABLE` | Bit 0 enables stream output. |
 
 Configuration registers are written in `s00_axi_aclk` and transferred to the DAC clock domain with a request/acknowledge CDC bundle. The V4.4 simulation checkpoint fixed the publish/coalescing path so same-cycle writes are not lost when a prior request is pending.
 
