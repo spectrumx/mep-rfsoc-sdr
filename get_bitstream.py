@@ -6,7 +6,9 @@ import urllib.request
 from hatchling.builders.hooks.plugin.interface import BuildHookInterface
 
 MODULE_NAME = "mep_rfsoc_sdr"
+RELEASE_BASE_URL = "https://github.com/spectrumx/mep-rfsoc-sdr/releases"
 DIST_BITSTREAM_DIR = pathlib.Path(__file__).absolute().parent / "dist" / "bitstream"
+UNKNOWN_VERSION_VALUES = {"", "none", "standard", "unknown"}
 
 
 def download_file(url, destination):
@@ -14,6 +16,30 @@ def download_file(url, destination):
     print(f"Downloading {url} to {destination}")
     urllib.request.urlretrieve(url, destination)
     print(f"Successfully downloaded {os.path.basename(destination)}")
+
+
+def version_is_known(version):
+    return str(version).strip().lower() not in UNKNOWN_VERSION_VALUES
+
+
+def release_asset_url(asset_name, version=None):
+    if version_is_known(version):
+        return f"{RELEASE_BASE_URL}/download/v{version}/{asset_name}"
+    return f"{RELEASE_BASE_URL}/latest/download/{asset_name}"
+
+
+def download_release_asset(asset_name, version, destination):
+    if version_is_known(version):
+        try:
+            download_file(release_asset_url(asset_name, version), destination)
+            return
+        except Exception as exc:
+            print(
+                f"Could not download {asset_name} for version {version}: {exc}. "
+                "Falling back to the latest GitHub release."
+            )
+
+    download_file(release_asset_url(asset_name), destination)
 
 
 class BitstreamHook(BuildHookInterface):
@@ -42,15 +68,21 @@ class BitstreamHook(BuildHookInterface):
             print(
                 "Required bitstream file not found locally. Attempting to download..."
             )
-            bit_url = f"https://github.com/spectrumx/mep-rfsoc-sdr/releases/download/v{version}/sdr_bitstream.bit"
-            download_file(bit_url, DIST_BITSTREAM_DIR / "sdr_bitstream.bit")
+            download_release_asset(
+                "sdr_bitstream.bit",
+                version,
+                DIST_BITSTREAM_DIR / "sdr_bitstream.bit",
+            )
 
         if src_hwh_file.exists():
             shutil.copy2(src_hwh_file, DIST_BITSTREAM_DIR)
         else:
             print("Required HWH file not found locally. Attempting to download...")
-            hwh_url = f"https://github.com/spectrumx/mep-rfsoc-sdr/releases/download/v{version}/sdr_bitstream.hwh"
-            download_file(hwh_url, DIST_BITSTREAM_DIR / "sdr_bitstream.hwh")
+            download_release_asset(
+                "sdr_bitstream.hwh",
+                version,
+                DIST_BITSTREAM_DIR / "sdr_bitstream.hwh",
+            )
 
         build_data["force_include"][str(DIST_BITSTREAM_DIR)] = "src/bitstream"
 

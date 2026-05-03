@@ -20,13 +20,14 @@ git clone --recursive https://github.com/spectrumx/mep-rfsoc-sdr.git
 cd mep-rfsoc-sdr
 ```
 
-Then install the package:
+Then build and install the package:
 ```bash
-sudo `which python` -m pip install --upgrade pip
+sudo `which python` -m pip install --upgrade pip build
+sudo `which python` -m build
 sudo `which python` -m pip install . -v
 ```
 
-The bitstream and hardware description files are not included in the repo by default. Upon package installation, they will be downloaded from the release page at: https://github.com/spectrumx/mep-rfsoc-sdr/releases. You may manually place these files in `src/bitstream` to use the provided files instead of downloading them.
+The bitstream and hardware description files are not included in the repo by default. The build step creates a source distribution first, which runs the bitstream download hook and fetches the files from the release page at: https://github.com/spectrumx/mep-rfsoc-sdr/releases. The wheel built from that source distribution is then installed. You may manually place these files in `src/bitstream` before building to use the provided files instead of downloading them.
 
 ## Receiving Data
 
