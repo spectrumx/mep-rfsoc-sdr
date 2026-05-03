@@ -39,6 +39,22 @@ To launch the UDP streaming script on the RFSoC 4x2, run:
 sudo -E `which python` -m mep_rfsoc_sdr.start_capture_rx
 ```
 
+The script configures the RFSoC overlay, tunes the ADC NCO, starts UDP streaming, and optionally enables a DAC transmit tone from the function-generator IP. If MQTT control is not available, command line flags can be used to set the default configuration:
+
+Command line options:
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `-f`, `--freq` | `1090` | ADC IF/NCO frequency in MHz. |
+| `-c`, `--channels` | `A` | ADC capture channels to stream. Valid channels are `A`, `B`, `C`, and `D`. |
+| `-r`, `--reset` | disabled | Load and configure the overlay, but leave ADC capture held in reset. |
+| `-i`, `--internal_clock` | external ref | Use the internal clock configuration instead of an external reference. |
+| `--tx-channel` | `A` | DAC output channel for the TX tone: `A`, `B`, `A,B`, or `None`. |
+| `--tx-center-freq` | unset | RFDC DAC mixer/NCO center frequency in MHz for selected TX channel(s). |
+| `--tx-offset-freq` | unset | Function-generator baseband offset frequency in MHz. If TX is otherwise requested, defaults to `0`. Must be less than `32 MHz` in magnitude. |
+| `--tx-amplitude` | `8191` | TX waveform peak amplitude in signed 14-bit DAC bins, `0..8191`. |
+| `-l`, `--log-level` | `INFO` | Python logging level. |
+
 ## Vivado build guide
 
 The build scripts expect Vivado 2024.1 and a license for the XXV_Ethernet core. Source the Vivado environment script, the path will depend on the installation:
