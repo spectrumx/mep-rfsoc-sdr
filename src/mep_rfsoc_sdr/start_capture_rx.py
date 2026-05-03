@@ -260,12 +260,18 @@ def configure_tx_function_generator(channel, tx_offset_mhz, tx_amplitude_q15, da
         )
 
     regs = gen.register_map
-    regs.ENABLE = 0
 
     if tx_offset_mhz is None:
+        regs.WAVEFORM_TYPE = 0
+        regs.FREQUENCY = 0
         regs.AMPLITUDE = 0
+        regs.PHASE = TX_DEFAULT_PHASE
+        regs.OFFSET = TX_DEFAULT_OFFSET
+        regs.ENABLE = 0
         logging.info("TX channel %s function generator %s disabled", channel, gen_name)
         return
+
+    regs.ENABLE = 0
 
     tx_offset_mhz = float(tx_offset_mhz)
     tx_offset_hz = int(round(tx_offset_mhz * 1e6))
