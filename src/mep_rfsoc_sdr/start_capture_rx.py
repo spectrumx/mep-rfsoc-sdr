@@ -237,7 +237,7 @@ def set_tx_dac_nco(overlay, f_c_mhz, f_s_mhz, tile, block):
     dac_tile.blocks[block].UpdateEvent(xrfdc.EVENT_MIXER)
 
 
-def configure_tx_function_generator(channel, tx_offset_mhz, tx_amplitude_q15, data):
+def get_tx_function_generator(channel, data, required):
     generator_names = TX_CHANNEL_CONFIG[channel]["function_generators"]
     gen_name = None
     gen = None
@@ -248,23 +248,49 @@ def configure_tx_function_generator(channel, tx_offset_mhz, tx_amplitude_q15, da
             break
 
     if gen is None:
-        if tx_offset_mhz is None:
+        if not required:
             logging.info(
                 "TX function generator IP for channel %s not present; nothing to disable",
                 channel,
             )
-            return
+            return None, None
         raise RuntimeError(
             f"Overlay does not expose a TX function generator for channel {channel} "
             f"({', '.join(generator_names)})"
         )
 
+    return gen_name, gen
+
+
+def set_tx_function_generator_amplitude(channel, tx_amplitude_q15, data):
+    gen_name, gen = get_tx_function_generator(channel, data, required=False)
+    if gen is None:
+        return
+
+    gen.register_map.AMPLITUDE = tx_amplitude_q15
+    logging.info(
+        "TX channel %s function generator %s amplitude set to Q15 0x%04X",
+        channel,
+        gen_name,
+        tx_amplitude_q15,
+    )
+
+
+def configure_tx_function_generator(channel, tx_offset_mhz, tx_amplitude_q15, data):
+    gen_name, gen = get_tx_function_generator(
+        channel,
+        data,
+        required=tx_offset_mhz is not None,
+    )
+    if gen is None:
+        return
+
     regs = gen.register_map
 
     if tx_offset_mhz is None:
+        regs.AMPLITUDE = 0
         regs.WAVEFORM_TYPE = 0
         regs.FREQUENCY = 0
-        regs.AMPLITUDE = 0
         regs.PHASE = TX_DEFAULT_PHASE
         regs.OFFSET = TX_DEFAULT_OFFSET
         regs.ENABLE = 0
@@ -410,6 +436,11 @@ def on_message(client, userdata, msg):
                         f"tx_channel must be one of {TX_CHANNEL_CHOICES}, got {set_value}"
                     )
                 else:
+                    if set_value == "None":
+                        data.tx_amplitude_bins = 0
+                        for ch in TX_CHANNEL_CONFIG:
+                            set_tx_function_generator_amplitude(ch, 0, data)
+
                     new_channels = (
                         () if set_value == "None" else tuple(set_value.split(","))
                     )
