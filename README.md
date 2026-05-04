@@ -27,11 +27,11 @@ sudo `which python` -m build
 sudo `which python` -m pip install . -v
 ```
 
-The bitstream and hardware description files are not included in the repo by default. The build hook fetches the official files from the release page at: https://github.com/spectrumx/mep-rfsoc-sdr/releases into `dist/bitstream` and includes those files in the installed package. To override the official files, manually place `sdr_bitstream.bit` and `sdr_bitstream.hwh` in `src/bitstream`, then rerun the build and install commands above. The build hook will copy those user-provided files into `dist/bitstream` and include them in the installed package.
+The bitstream and hardware description files are not included in the repo by default. The build hook fetches the official files from the release page at: https://github.com/spectrumx/mep-rfsoc-sdr/releases into `dist/bitstream-v{version}` and includes those files in the installed package. To override the official files, manually place `sdr_bitstream.bit` and `sdr_bitstream.hwh` in `src/bitstream`, then rerun the build and install commands above. The build hook will copy those user-provided files into `dist/bitstream-v{version}` and include them in the installed package.
 
 ## Receiving Data
 
-The SDR image streams captured RF data over a UDP connection. I/Q data is sent in interleaved packets with a header providing timing and frequency information. Telemetry and commands are optionally sent over MQTT. This data stream can be received and parsed by utilties in the [mep-examples](https://github.com/spectrumx/mep-examples) repository. 
+The SDR image streams captured RF data over a UDP connection. I/Q data is sent in interleaved packets with a header providing timing and frequency information. Telemetry and commands are optionally sent over MQTT. This data stream can be received and parsed by utilties in the [mep-examples](https://github.com/spectrumx/mep-examples) repository.
 
 To launch the UDP streaming script on the RFSoC 4x2, run:
 
