@@ -62,14 +62,14 @@ def force_include_destination(target_name):
 
 class BitstreamHook(BuildHookInterface):
     def clean(self, versions) -> None:
-        for dirpath, _dirnames, filenames in DIST_BITSTREAM_DIR.walk():
-            for name in filenames:
-                if name.endswith(".bit") or name.endswith(".hwh"):
-                    (dirpath / name).unlink()
-        try:
-            DIST_BITSTREAM_DIR.rmdir()
-        except OSError:
-            pass
+        if DIST_BITSTREAM_DIR.exists():
+            for childpath in DIST_BITSTREAM_DIR.iterdir():
+                if childpath.name.endswith(".bit") or childpath.name.endswith(".hwh"):
+                    childpath.unlink()
+            try:
+                DIST_BITSTREAM_DIR.rmdir()
+            except OSError:
+                pass
 
     def initialize(self, version, build_data) -> None:
         DIST_BITSTREAM_DIR.mkdir(exist_ok=True, parents=True)
