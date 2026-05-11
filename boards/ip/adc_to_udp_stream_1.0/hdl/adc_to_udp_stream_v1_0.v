@@ -739,6 +739,7 @@ module adc_to_udp_stream_v1_0 #
     wire fifo_0_full_reg_m00;
     wire fifo_1_full_reg_m00;
     wire update_packet_m00;
+    wire capture_enable_m00;
 
     // Send UDP Packet over AXI bus
     assign start_payload = (packet_state >= (HEADER_STATE-FIFO_READ_DELAY)) && (packet_state <= FINAL_STATE);
@@ -762,7 +763,18 @@ module adc_to_udp_stream_v1_0 #
         .signal_clk1(update_packet_m00)
     );
 
+    signal_clock_sync capture_enable_sync (
+        .clk1_in(m00_axis_aclk),
+        .signal_clk0(capture_enable_s01),
+        .signal_clk1(capture_enable_m00)
+    );
+
     reg udp_packet_axis_valid;
+    reg udp_packet_axis_last;
+    reg [C_M00_AXIS_TKEEP_WIDTH-1:0] udp_packet_axis_keep;
+    wire m00_axis_fire = udp_packet_axis_valid && m00_axis_tready;
+    wire m00_axis_can_load = !udp_packet_axis_valid || m00_axis_fire;
+
     always @(posedge m00_axis_aclk or negedge m00_axis_aresetn) begin
         if (~m00_axis_aresetn || user_reset_m00) begin
             packet_idx <= 64'd0;
@@ -779,7 +791,7 @@ module adc_to_udp_stream_v1_0 #
                 packet_state <= 16'd0;
                 start_udp_header <= 1'b1;
                 packet_idx <= packet_idx + 1;       // Increment packets sent counter
-            end else if (m00_axis_tready) begin
+            end else if (m00_axis_can_load) begin
                 if (start_udp_header) begin
                     // Wait one cycle for packet to update
                     in_udp_header <= 1'b1;
@@ -791,7 +803,7 @@ module adc_to_udp_stream_v1_0 #
                         start_udp_header <= 1'b0;
                         in_udp_header <= 1'b0;
                     end
-                end 
+                end
 
                 // Increment packet state
                 if (in_udp_header || in_payload) begin
@@ -827,52 +839,58 @@ module adc_to_udp_stream_v1_0 #
 
     end
 
-    // Assign the latched values to the read enables
-    // disable when tready is low
-    assign fifo_0_read_en = fifo_0_read_en_latched && start_payload && m00_axis_tready && !fifo_0_rst_busy_s01;
-    assign fifo_1_read_en = fifo_1_read_en_latched && start_payload && m00_axis_tready && !fifo_1_rst_busy_s01;
+    // Read FIFO data only when the M00 master can load a new output beat.
+    assign fifo_0_read_en = fifo_0_read_en_latched && start_payload && m00_axis_can_load && !fifo_0_rst_busy_s01;
+    assign fifo_1_read_en = fifo_1_read_en_latched && start_payload && m00_axis_can_load && !fifo_1_rst_busy_s01;
 
     always @(posedge m00_axis_aclk or negedge m00_axis_aresetn) begin
         if (~m00_axis_aresetn || user_reset_m00) begin
             udp_packet_axis_data <= 16'b0; // default to 0
             fifo_out_data_prev <= 16'b0; // default to 0
             udp_packet_axis_valid <= 1'b0;
-        end else begin
-            // First transaction 
+            udp_packet_axis_last <= 1'b0;
+            udp_packet_axis_keep <= {C_M00_AXIS_TKEEP_WIDTH{1'b0}};
+        end else if (m00_axis_can_load) begin
+            udp_packet_axis_last <= 1'b0;
+            udp_packet_axis_keep <= 8'hFF;
+
+            // First transaction
             if (start_udp_header && !in_udp_header) begin
-                // Assign tdata
+                // Prefetch tdata one cycle before asserting TVALID, preserving
+                // the existing packet-byte timing.
+                udp_packet_axis_valid <= 1'b0;
                 udp_packet_axis_data <= udp_packet[packet_state];
             end else if(in_udp_header) begin
             // If read enable is active, assign AXIS buffer to FIFO output
-                udp_packet_axis_valid <= 1'b1;
+                udp_packet_axis_valid <= capture_enable_m00;
                 udp_packet_axis_data <= udp_packet[packet_state];
+                udp_packet_axis_last <= (packet_state == FINAL_STATE);
+                udp_packet_axis_keep <= (packet_state == FINAL_STATE) ? 8'h03 : 8'hFF;
             end else if(fifo_0_read_en) begin
-                udp_packet_axis_valid <= 1'b1;
+                udp_packet_axis_valid <= capture_enable_m00;
                 fifo_out_data_prev <= fifo_0_out_data;
                 udp_packet_axis_data <= {fifo_0_out_data[47:0], fifo_out_data_prev[63:48]};
+                udp_packet_axis_last <= (packet_state == FINAL_STATE);
+                udp_packet_axis_keep <= (packet_state == FINAL_STATE) ? 8'h03 : 8'hFF;
             end else if(fifo_1_read_en) begin
-                udp_packet_axis_valid <= 1'b1;
+                udp_packet_axis_valid <= capture_enable_m00;
                 fifo_out_data_prev <= fifo_1_out_data;
                 udp_packet_axis_data <= {fifo_1_out_data[47:0], fifo_out_data_prev[63:48]};
+                udp_packet_axis_last <= (packet_state == FINAL_STATE);
+                udp_packet_axis_keep <= (packet_state == FINAL_STATE) ? 8'h03 : 8'hFF;
             end else begin
                 udp_packet_axis_valid <= 1'b0;
+                udp_packet_axis_data <= 64'h0;
             end
         end
     end
 
-    wire capture_enable_m00;
-    signal_clock_sync capture_enable_sync (
-        .clk1_in(m00_axis_aclk),
-        .signal_clk0(capture_enable_s01),
-        .signal_clk1(capture_enable_m00)
-    );
-
     // AXI4-Stream control signals
-    assign m00_axis_tvalid = udp_packet_axis_valid && capture_enable_m00;     // Valid when we're in the middle of sending the packet
-    assign m00_axis_tdata = m00_axis_tvalid ? udp_packet_axis_data : 64'h0;               // Transmit each 64-bit word of the UDP packet
+    assign m00_axis_tvalid = udp_packet_axis_valid;     // Valid when we're in the middle of sending the packet
+    assign m00_axis_tdata = udp_packet_axis_data;       // Transmit each 64-bit word of the UDP packet
     assign m00_axis_tuser = 1'b0;
-    assign m00_axis_tlast = (packet_state == FINAL_STATE) && m00_axis_tvalid; // Mark the last word of the packet
-    assign m00_axis_tkeep = m00_axis_tlast ? 8'h3 : 8'hFF;
+    assign m00_axis_tlast = udp_packet_axis_last;       // Mark the last word of the packet
+    assign m00_axis_tkeep = udp_packet_axis_keep;
 
     assign s01_axis_tready = 1'b1;
 
