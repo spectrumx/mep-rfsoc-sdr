@@ -322,6 +322,8 @@ module adc_to_udp_stream_v1_0 #
 
     wire fifo_0_full_s01;
     wire fifo_1_full_s01;
+    wire fifo_0_full_raw_s01;
+    wire fifo_1_full_raw_s01;
     wire fifo_0_empty;
     wire fifo_1_empty;
     wire fifo_0_rst_busy_s01;
@@ -331,6 +333,9 @@ module adc_to_udp_stream_v1_0 #
     wire fifo_0_rst_combined_s01;
     wire fifo_1_rst_combined_s01;
     wire capture_enable_s01;
+    wire fifo_0_ready_s01;
+    wire fifo_1_ready_s01;
+    wire s01_axis_accept_s01;
 
     initial begin
         fifo_0_empty_latched = 1'b0;
@@ -345,9 +350,7 @@ module adc_to_udp_stream_v1_0 #
             fifo_0_reset <= 1;
             fifo_1_reset <= 1;
         end else begin
-            // Write data to the appropriate buffer
-            // Increment counter
-            if (s01_axis_tvalid) begin
+            if (s01_axis_accept_s01) begin
                 received_counter_s01 <= received_counter_s01 + 1;
             end
 
@@ -379,9 +382,13 @@ module adc_to_udp_stream_v1_0 #
     assign fifo_0_rst_combined_s01 = fifo_0_rst_busy_s01 || fifo_0_rst_busy_latched_s01;
     assign fifo_1_rst_combined_s01 = fifo_1_rst_busy_s01 || fifo_1_rst_busy_latched_s01;
 
-    assign capture_enable_s01 = !user_reset_s01 || pps_detect_s01; 
-    assign fifo_0_write_en_s01 = s01_axis_tvalid && s01_axis_aresetn && capture_enable_s01 && !fifo_0_rst_combined_s01 && !buffer_select_s01;
-    assign fifo_1_write_en_s01 = s01_axis_tvalid && s01_axis_aresetn && capture_enable_s01 && !fifo_1_rst_combined_s01 && buffer_select_s01;
+    assign capture_enable_s01 = !user_reset_s01 || pps_detect_s01;
+    assign fifo_0_ready_s01 = s01_axis_aresetn && !user_reset_s01 && capture_enable_s01 && !fifo_0_rst_combined_s01 && !fifo_0_full_raw_s01;
+    assign fifo_1_ready_s01 = s01_axis_aresetn && !user_reset_s01 && capture_enable_s01 && !fifo_1_rst_combined_s01 && !fifo_1_full_raw_s01;
+    assign s01_axis_tready = buffer_select_s01 ? fifo_1_ready_s01 : fifo_0_ready_s01;
+    assign s01_axis_accept_s01 = s01_axis_tvalid && s01_axis_tready;
+    assign fifo_0_write_en_s01 = s01_axis_accept_s01 && !buffer_select_s01;
+    assign fifo_1_write_en_s01 = s01_axis_accept_s01 && buffer_select_s01;
 
     // Flag fifo full transition for a single cycle
     always @(posedge m00_axis_aclk) begin
@@ -436,6 +443,7 @@ module adc_to_udp_stream_v1_0 #
         .wr_clk(s01_axis_aclk),
         .wr_en(fifo_0_write_en_s01),
         .din(s01_axis_tdata),
+        .full(fifo_0_full_raw_s01),
         .prog_full(fifo_0_full_s01),
         .wr_data_count(fifo_0_wr_count),
         .wr_rst_busy(fifo_0_wr_rst_busy),
@@ -469,6 +477,7 @@ module adc_to_udp_stream_v1_0 #
         .wr_clk(s01_axis_aclk),
         .wr_en(fifo_1_write_en_s01),
         .din(s01_axis_tdata),
+        .full(fifo_1_full_raw_s01),
         .prog_full(fifo_1_full_s01),
         .wr_data_count(fifo_1_wr_count),
         .wr_rst_busy(fifo_1_wr_rst_busy),
@@ -877,9 +886,6 @@ module adc_to_udp_stream_v1_0 #
     assign m00_axis_tuser = 1'b0;
     assign m00_axis_tlast = (packet_state == FINAL_STATE) && m00_axis_tvalid; // Mark the last word of the packet
     assign m00_axis_tkeep = m00_axis_tlast ? 8'h03 : 8'hFF;
-
-    assign s01_axis_tready = 1'b1;
-
     //////////////////////////////////////////////////////////////////////////
     // AXI4-Lite Control Bus
     //////////////////////////////////////////////////////////////////////////

@@ -151,6 +151,7 @@ module adc_to_udp_stream_axis_tb;
     integer radio_stall_done;
     integer payload_stall_done;
     integer final_stall_done;
+    integer payload_start_delta;
 
     reg prev_m00_tvalid;
     reg prev_m00_tready;
@@ -459,7 +460,21 @@ module adc_to_udp_stream_axis_tb;
         radio_stall_done = 0;
         payload_stall_done = 0;
         final_stall_done = 0;
+        payload_start_delta = -1;
     end
+
+    function automatic integer find_accepted_sample_index;
+        input [15:0] sample_word;
+        integer sample_index;
+        begin
+            find_accepted_sample_index = -1;
+            for (sample_index = 0; sample_index < accepted_sample_count; sample_index = sample_index + 1) begin
+                if ((find_accepted_sample_index < 0) && (accepted_sample_words[sample_index] == sample_word)) begin
+                    find_accepted_sample_index = sample_index;
+                end
+            end
+        end
+    endfunction
 
     always @(posedge m00_axis_aclk or negedge m00_axis_aresetn) begin
         if (!m00_axis_aresetn) begin
@@ -607,12 +622,18 @@ module adc_to_udp_stream_axis_tb;
         integer fail_count;
         integer first_fail;
         integer expected_sample_index;
+        integer payload_start_index;
+        integer current_payload_delta;
         reg [15:0] exp_word;
+        reg [15:0] first_payload_word;
         reg [7:0] exp_byte;
         reg [7:0] act_byte;
         begin
             fail_count = 0;
             first_fail = -1;
+            first_payload_word = {pkt_byte_stream[PAYLOAD_BYTE_OFFSET + 1],
+                                  pkt_byte_stream[PAYLOAD_BYTE_OFFSET + 0]};
+            payload_start_index = find_accepted_sample_index(first_payload_word);
 
             $display("[AXIS] ===== Packet %0d scaffold verification =====", pkt_num);
             $display("[AXIS] pkt_byte_count = %0d (expected = %0d)", pkt_byte_count, EXPECTED_PKT_BYTES);
@@ -622,24 +643,43 @@ module adc_to_udp_stream_axis_tb;
                 first_fail = -2;
             end
 
-            for (b = 0; b < EXPECTED_PAYLOAD_BYTES; b = b + 1) begin
-                expected_sample_index = (pkt_num * WORDS_PER_PACKET) + 16'h004C + (b / 2);
-                if (expected_sample_index < accepted_sample_count) begin
-                    exp_word = accepted_sample_words[expected_sample_index];
-                    exp_byte = ((b % 2) == 0) ? exp_word[7:0] : exp_word[15:8];
-                end else begin
-                    exp_word = 16'h0;
-                    exp_byte = 8'h0;
+            if (payload_start_index < 0) begin
+                fail_count = fail_count + 1;
+                first_fail = 0;
+                $display("FAIL: Packet %0d first payload word 0x%04x was not found in accepted S01 samples",
+                         pkt_num, first_payload_word);
+            end else begin
+                current_payload_delta = payload_start_index - (pkt_num * WORDS_PER_PACKET);
+                $display("[AXIS] Packet %0d payload_start_index=%0d start_delta=%0d first_word=0x%04x",
+                         pkt_num, payload_start_index, current_payload_delta, first_payload_word);
+                if (payload_start_delta < 0) begin
+                    payload_start_delta = current_payload_delta;
+                end else if (current_payload_delta != payload_start_delta) begin
                     fail_count = fail_count + 1;
-                    if (first_fail == -1) begin
-                        first_fail = b;
-                    end
+                    first_fail = 0;
+                    $display("FAIL: Packet %0d payload start delta changed: expected=%0d actual=%0d",
+                             pkt_num, payload_start_delta, current_payload_delta);
                 end
-                act_byte = pkt_byte_stream[PAYLOAD_BYTE_OFFSET + b];
-                if ((expected_sample_index < accepted_sample_count) && (act_byte !== exp_byte)) begin
-                    fail_count = fail_count + 1;
-                    if (first_fail == -1) begin
-                        first_fail = b;
+
+                for (b = 0; b < EXPECTED_PAYLOAD_BYTES; b = b + 1) begin
+                    expected_sample_index = payload_start_index + (b / 2);
+                    if (expected_sample_index < accepted_sample_count) begin
+                        exp_word = accepted_sample_words[expected_sample_index];
+                        exp_byte = ((b % 2) == 0) ? exp_word[7:0] : exp_word[15:8];
+                    end else begin
+                        exp_word = 16'h0;
+                        exp_byte = 8'h0;
+                        fail_count = fail_count + 1;
+                        if (first_fail == -1) begin
+                            first_fail = b;
+                        end
+                    end
+                    act_byte = pkt_byte_stream[PAYLOAD_BYTE_OFFSET + b];
+                    if ((expected_sample_index < accepted_sample_count) && (act_byte !== exp_byte)) begin
+                        fail_count = fail_count + 1;
+                        if (first_fail == -1) begin
+                            first_fail = b;
+                        end
                     end
                 end
             end
@@ -649,9 +689,9 @@ module adc_to_udp_stream_axis_tb;
             end else begin
                 byte_check_failures = byte_check_failures + fail_count;
                 if (first_fail >= 0) begin
-                    expected_sample_index = (pkt_num * WORDS_PER_PACKET) + 16'h004C + (first_fail / 2);
+                    expected_sample_index = payload_start_index + (first_fail / 2);
                     act_byte = pkt_byte_stream[PAYLOAD_BYTE_OFFSET + first_fail];
-                    if (expected_sample_index < accepted_sample_count) begin
+                    if ((payload_start_index >= 0) && (expected_sample_index < accepted_sample_count)) begin
                         exp_word = accepted_sample_words[expected_sample_index];
                         exp_byte = ((first_fail % 2) == 0) ? exp_word[7:0] : exp_word[15:8];
                         $display("FAIL: Packet %0d payload mismatches=%0d first_payload_byte=%0d expected=0x%02x actual=0x%02x",
