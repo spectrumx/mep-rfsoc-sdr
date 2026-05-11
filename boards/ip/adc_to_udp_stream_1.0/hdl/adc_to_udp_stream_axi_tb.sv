@@ -261,6 +261,30 @@ module adc_to_udp_stream_axi_tb;
 
         $display("Step 8 basic read/write checks completed.");
 
+        // Step 9: Verify Independent AW/W Acceptance
+
+        // C9.3: Same-cycle AW/W acceptance
+        axi_write_same_cycle(REG_FREQUENCY_IDX, 32'h0A0B_0C0D, 4'hF);
+        expect_read(REG_FREQUENCY_IDX, 32'h0A0B_0C0D, "Step 9 same-cycle AW/W");
+
+        // C9.4: AW-before-W acceptance
+        axi_write_aw_before_w(REG_FREQUENCY_IDX, 32'h0102_0304, 4'hF);
+        expect_read(REG_FREQUENCY_IDX, 32'h0102_0304, "Step 9 AW-before-W");
+
+        // C9.5: W-before-AW acceptance
+        axi_write_w_before_aw(REG_FREQUENCY_IDX, 32'h0506_0708, 4'hF);
+        expect_read(REG_FREQUENCY_IDX, 32'h0506_0708, "Step 9 W-before-AW");
+
+        // C9.6: BREADY-stall write-response (stall for at least 3 cycles)
+        axi_write_hold_bready(REG_FREQUENCY_IDX, 32'h1111_2222, 4'hF, 3);
+        expect_read(REG_FREQUENCY_IDX, 32'h1111_2222, "Step 9 BREADY stall");
+
+        // C9.7: Immediate follow-up write after stalled response completes
+        axi_write_same_cycle(REG_FREQUENCY_IDX, 32'h3333_4444, 4'hF);
+        expect_read(REG_FREQUENCY_IDX, 32'h3333_4444, "Step 9 follow-up after BREADY stall");
+
+        $display("Step 9 independent AW/W checks completed.");
+
         // Final pass/fail
         if (total_failures == 0) begin
             $display("PASS: all S00 AXI smoke tests passed (0 failures).");
@@ -500,10 +524,16 @@ module adc_to_udp_stream_axi_tb;
                 fail_test("axi_write_hold_bready: timeout waiting for BVALID.");
             end
 
-            // Hold Bready=0 for stall_cycles
+            // Hold Bready=0 for stall_cycles; check protocol compliance each cycle
             for (i = 0; i < stall_cycles; i = i + 1) begin
                 if (!s00_axi_bvalid) begin
-                    fail_test("axi_write_hold_bready: BVALID dropped during stall.");
+                    fail_test($sformatf("axi_write_hold_bready: BVALID dropped on stall cycle %0d.", i));
+                end
+                if (s00_axi_awready) begin
+                    fail_test($sformatf("axi_write_hold_bready: AWREADY asserted on stall cycle %0d (AWVALID=%0d).", i, s00_axi_awvalid));
+                end
+                if (s00_axi_wready) begin
+                    fail_test($sformatf("axi_write_hold_bready: WREADY asserted on stall cycle %0d (WVALID=%0d).", i, s00_axi_wvalid));
                 end
                 @(posedge s00_axi_aclk);
             end
