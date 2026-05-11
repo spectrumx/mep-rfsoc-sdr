@@ -944,6 +944,8 @@ module adc_to_udp_stream_v1_0 #
     reg [(C_S00_AXI_DATA_WIDTH/8)-1:0] pending_w_strb;
     reg pending_w;
     reg bvalid_reg;
+    reg rvalid_reg;
+    reg [C_S00_AXI_ADDR_WIDTH-1:0] araddr_latch;
     wire write_commit = pending_aw && pending_w && !bvalid_reg;
 
     wire [31:0] merged_ctrl;
@@ -978,7 +980,7 @@ module adc_to_udp_stream_v1_0 #
 
     assign s00_axi_awready = !pending_aw && !bvalid_reg;
     assign s00_axi_wready  = !pending_w  && !bvalid_reg;
-    assign s00_axi_arready = 1'b1;
+    assign s00_axi_arready = !rvalid_reg;
     assign s00_axi_bvalid  = bvalid_reg;
 
     // AW channel: accept and latch address independently
@@ -1130,59 +1132,40 @@ module adc_to_udp_stream_v1_0 #
         end
     end
 
-    // AXI4 Read Data (output the register value as 32-bit)
-    always @(posedge s00_axi_aclk) begin
-        if (~s00_axi_aresetn) begin
-            s00_axi_rdata <= 32'b0;
-        end else if (s00_axi_arvalid && !s00_axi_rvalid) begin
-            case (s00_axi_araddr)
-                32'h0000_0000: s00_axi_rdata = {30'h0, enable_next_pps_s00, user_reset_s00}; 
-                32'h0000_0004: s00_axi_rdata = frequency_idx;
-                32'h0000_0008: s00_axi_rdata = received_counter_s01;           
-                32'h0000_000C: begin
-                    s00_axi_rdata = {eth_dst_mac[2], eth_dst_mac[3], eth_dst_mac[4], eth_dst_mac[5]};
-                end
-                32'h0000_0010: begin 
-                    s00_axi_rdata = {8'b0, 8'b0, eth_dst_mac[0], eth_dst_mac[1]};
-                end
-                32'h0000_0014: begin 
-                    // Source IP
-                    s00_axi_rdata = {ip_header[12], ip_header[13], ip_header[14], ip_header[15]};
-                end
-                32'h0000_0018: begin 
-                    // Destination IP
-                    s00_axi_rdata = {ip_header[16], ip_header[17], ip_header[18], ip_header[19]};
-                end
-                32'h0000_001C: begin 
-                    // Source Port
-                    s00_axi_rdata = {8'b0, 8'b0, udp_header[0], udp_header[1]};
-                end
-                32'h0000_0020: begin 
-                    // Destination Port
-                    s00_axi_rdata = {8'b0, 8'b0, udp_header[2], udp_header[3]};
-                end
-                32'h0000_0024: s00_axi_rdata = sample_idx_offset[31:0];
-                32'h0000_0028: s00_axi_rdata = sample_idx_offset[63:32];
-                32'h0000_002C: s00_axi_rdata = pps_count[31:0];
-                32'h0000_0030: s00_axi_rdata = sample_rate_numerator[31:0];
-                32'h0000_0034: s00_axi_rdata = sample_rate_numerator[63:32];
-                32'h0000_0038: s00_axi_rdata = sample_rate_denominator[31:0];
-                32'h0000_003C: s00_axi_rdata = sample_rate_denominator[63:32];
-                default: s00_axi_rdata = 32'b0;
-            endcase
-        end
-    end
+    assign s00_axi_rvalid = rvalid_reg;
 
-    // AXI4 Read Data Valid
-    reg rvalid_reg;
-    always @(posedge s00_axi_aclk) begin
-        if (~s00_axi_aresetn) begin
+    always @(posedge s00_axi_aclk or negedge s00_axi_aresetn) begin
+        if (!s00_axi_aresetn) begin
+            araddr_latch <= {C_S00_AXI_ADDR_WIDTH{1'b0}};
+            s00_axi_rdata <= 32'h0;
             rvalid_reg <= 1'b0;
         end else begin
-            rvalid_reg <= s00_axi_arvalid && !rvalid_reg && s00_axi_rready;
+            if (rvalid_reg && s00_axi_rready) begin
+                rvalid_reg <= 1'b0;
+            end else if (s00_axi_arvalid && s00_axi_arready) begin
+                araddr_latch <= s00_axi_araddr;
+                rvalid_reg <= 1'b1;
+                case (s00_axi_araddr[6:0])
+                    REG_CTRL: s00_axi_rdata <= {30'h0, enable_next_pps_s00, user_reset_s00};
+                    REG_FREQUENCY_IDX: s00_axi_rdata <= frequency_idx;
+                    REG_RECEIVED_COUNTER: s00_axi_rdata <= received_counter_s01;
+                    REG_ETH_DST_MAC_LSB: s00_axi_rdata <= {eth_dst_mac[2], eth_dst_mac[3], eth_dst_mac[4], eth_dst_mac[5]};
+                    REG_ETH_DST_MAC_MSB: s00_axi_rdata <= {16'h0, eth_dst_mac[0], eth_dst_mac[1]};
+                    REG_IP_SRC_ADDR: s00_axi_rdata <= {ip_header[12], ip_header[13], ip_header[14], ip_header[15]};
+                    REG_IP_DST_ADDR: s00_axi_rdata <= {ip_header[16], ip_header[17], ip_header[18], ip_header[19]};
+                    REG_IP_SRC_PORT: s00_axi_rdata <= {16'h0, udp_header[0], udp_header[1]};
+                    REG_IP_DST_PORT: s00_axi_rdata <= {16'h0, udp_header[2], udp_header[3]};
+                    REG_SAMPLE_IDX_OFFSET_LSB: s00_axi_rdata <= sample_idx_offset[31:0];
+                    REG_SAMPLE_IDX_OFFSET_MSB: s00_axi_rdata <= sample_idx_offset[63:32];
+                    REG_PPS_COUNTER: s00_axi_rdata <= pps_count[31:0];
+                    REG_SAMPLE_RATE_NUM_LSB: s00_axi_rdata <= sample_rate_numerator[31:0];
+                    REG_SAMPLE_RATE_NUM_MSB: s00_axi_rdata <= sample_rate_numerator[63:32];
+                    REG_SAMPLE_RATE_DEN_LSB: s00_axi_rdata <= sample_rate_denominator[31:0];
+                    REG_SAMPLE_RATE_DEN_MSB: s00_axi_rdata <= sample_rate_denominator[63:32];
+                    default: s00_axi_rdata <= 32'h0;
+                endcase
+            end
         end
     end
-
-    assign s00_axi_rvalid = rvalid_reg;
 
 endmodule
