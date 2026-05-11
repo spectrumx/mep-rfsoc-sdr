@@ -772,7 +772,8 @@ module adc_to_udp_stream_v1_0 #
     reg udp_packet_axis_valid;
     reg udp_packet_axis_last;
     reg [C_M00_AXIS_TKEEP_WIDTH-1:0] udp_packet_axis_keep;
-    wire m00_axis_fire = udp_packet_axis_valid && m00_axis_tready;
+    wire udp_packet_axis_tvalid = udp_packet_axis_valid && capture_enable_m00;
+    wire m00_axis_fire = udp_packet_axis_tvalid && m00_axis_tready;
     wire m00_axis_can_load = !udp_packet_axis_valid || m00_axis_fire;
 
     always @(posedge m00_axis_aclk or negedge m00_axis_aresetn) begin
@@ -886,7 +887,7 @@ module adc_to_udp_stream_v1_0 #
     end
 
     // AXI4-Stream control signals
-    assign m00_axis_tvalid = udp_packet_axis_valid && capture_enable_m00;     // Valid when we're in the middle of sending the packet
+    assign m00_axis_tvalid = udp_packet_axis_tvalid; // Valid when we're in the middle of sending the packet
     assign m00_axis_tdata = udp_packet_axis_data;       // Transmit each 64-bit word of the UDP packet
     assign m00_axis_tuser = 1'b0;
     assign m00_axis_tlast = udp_packet_axis_last;       // Mark the last word of the packet
