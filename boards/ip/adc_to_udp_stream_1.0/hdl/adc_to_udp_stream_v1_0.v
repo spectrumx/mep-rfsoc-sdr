@@ -880,6 +880,23 @@ module adc_to_udp_stream_v1_0 #
     // AXI4-Lite Control Bus
     //////////////////////////////////////////////////////////////////////////
 
+    localparam [6:0] REG_CTRL                    = 7'h00;
+    localparam [6:0] REG_FREQUENCY_IDX           = 7'h04;
+    localparam [6:0] REG_RECEIVED_COUNTER        = 7'h08;
+    localparam [6:0] REG_ETH_DST_MAC_LSB         = 7'h0C;
+    localparam [6:0] REG_ETH_DST_MAC_MSB         = 7'h10;
+    localparam [6:0] REG_IP_SRC_ADDR             = 7'h14;
+    localparam [6:0] REG_IP_DST_ADDR             = 7'h18;
+    localparam [6:0] REG_IP_SRC_PORT             = 7'h1C;
+    localparam [6:0] REG_IP_DST_PORT             = 7'h20;
+    localparam [6:0] REG_SAMPLE_IDX_OFFSET_LSB   = 7'h24;
+    localparam [6:0] REG_SAMPLE_IDX_OFFSET_MSB   = 7'h28;
+    localparam [6:0] REG_PPS_COUNTER             = 7'h2C;
+    localparam [6:0] REG_SAMPLE_RATE_NUM_LSB     = 7'h30;
+    localparam [6:0] REG_SAMPLE_RATE_NUM_MSB     = 7'h34;
+    localparam [6:0] REG_SAMPLE_RATE_DEN_LSB     = 7'h38;
+    localparam [6:0] REG_SAMPLE_RATE_DEN_MSB     = 7'h3C;
+
     assign s00_axi_awready = 1'b1;
     assign s00_axi_wready = 1'b1;
     assign s00_axi_bresp = 2'b00;
