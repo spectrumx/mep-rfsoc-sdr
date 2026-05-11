@@ -360,30 +360,191 @@ module adc_to_udp_stream_axi_tb;
 
         // C11.1-C11.3: Read stall for FREQUENCY_IDX with RREADY=0
         // First write a known value
-        axi_write_same_cycle(REG_FREQUENCY_IDX, 32'h5566_7788, 4'hF);
-        // Read with RREADY stalled for 5 cycles after RVALID
+        axi_write_same_cycle(REG_FREQUENCY_IDX, 32'h2468_ACE0, 4'hF);
+        // Read with RREADY stalled for 4 cycles after RVALID
         begin
             reg [31:0] stalled_rdata;
-            axi_read_rready_stall(REG_FREQUENCY_IDX, stalled_rdata, 5);
-            if (stalled_rdata !== 32'h5566_7788) begin
-                fail_test($sformatf("Step 11 RREADY stall FREQUENCY_IDX: expected 0x55667788 actual 0x%08h", stalled_rdata));
+            axi_read_rready_stall(REG_FREQUENCY_IDX, stalled_rdata, 4);
+            if (stalled_rdata !== 32'h2468_ACE0) begin
+                fail_test($sformatf("Step 11 RREADY stall FREQUENCY_IDX: expected 0x2468ace0 actual 0x%08h", stalled_rdata));
             end else begin
-                $display("PASS: Step 11 RREADY stall FREQUENCY_IDX data stable (5 cycles)");
+                $display("PASS: Step 11 RREADY stall FREQUENCY_IDX data stable (4 cycles)");
             end
         end
+        expect_read(REG_FREQUENCY_IDX, 32'h2468_ACE0, "Step 11 follow-up after stalled read");
 
         // C11.4: Same stall test for an invalid address returning zero
         begin
             reg [31:0] inv_rdata;
-            axi_read_rready_stall(7'h01, inv_rdata, 5);
+            axi_read_rready_stall(7'h01, inv_rdata, 3);
             if (inv_rdata !== 32'h0000_0000) begin
                 fail_test($sformatf("Step 11 RREADY stall invalid addr: expected 0x00000000 actual 0x%08h", inv_rdata));
             end else begin
-                $display("PASS: Step 11 RREADY stall invalid address data stable (5 cycles)");
+                $display("PASS: Step 11 RREADY stall invalid address data stable (3 cycles)");
             end
         end
+        expect_read(REG_CTRL, 32'h0000_0000, "Step 11 follow-up after invalid stalled read");
 
         $display("Step 11 read backpressure checks completed.");
+
+        // Step 12: Verify Reset During Partial Transactions
+
+        // C12.6: Reset after AW before W
+        begin
+            check_s00_idle("Step 12 pre AW-before-W idle");
+            s00_axi_awaddr = REG_FREQUENCY_IDX;
+            s00_axi_awprot = 3'h0;
+            s00_axi_awvalid = 1;
+            s00_axi_wvalid = 0;
+            begin
+                integer timeout;
+                timeout = 1000;
+                while (!s00_axi_awready && timeout > 0) begin
+                    @(posedge s00_axi_aclk);
+                    timeout = timeout - 1;
+                end
+                if (timeout == 0) begin
+                    fail_test("Step 12 AW-before-W: timeout waiting for AWREADY.");
+                end
+            end
+            @(posedge s00_axi_aclk);
+            s00_axi_awvalid = 0;
+            pulse_s00_reset("Step 12 reset after AW before W");
+            post_reset_write_read("Step 12 post AW-only reset", 32'h1200_0001);
+        end
+
+        // C12.7: Reset after W before AW
+        begin
+            s00_axi_wdata = 32'hDEAD_BEEF;
+            s00_axi_wstrb = 4'hF;
+            s00_axi_wvalid = 1;
+            s00_axi_awvalid = 0;
+            begin
+                integer timeout;
+                timeout = 1000;
+                while (!s00_axi_wready && timeout > 0) begin
+                    @(posedge s00_axi_aclk);
+                    timeout = timeout - 1;
+                end
+                if (timeout == 0) begin
+                    fail_test("Step 12 W-before-AW: timeout waiting for WREADY.");
+                end
+            end
+            @(posedge s00_axi_aclk);
+            s00_axi_wvalid = 0;
+            s00_axi_wstrb = 0;
+            pulse_s00_reset("Step 12 reset after W before AW");
+            post_reset_write_read("Step 12 post W-only reset", 32'h1200_0002);
+        end
+
+        // C12.8: Reset while BVALID held
+        begin
+            s00_axi_awaddr = REG_FREQUENCY_IDX;
+            s00_axi_awprot = 3'h0;
+            s00_axi_awvalid = 1;
+            s00_axi_wdata = 32'hCAFE_0003;
+            s00_axi_wstrb = 4'hF;
+            s00_axi_wvalid = 1;
+            s00_axi_bready = 0;
+            begin
+                integer timeout;
+                timeout = 1000;
+                while ((!s00_axi_awready || !s00_axi_wready) && timeout > 0) begin
+                    @(posedge s00_axi_aclk);
+                    timeout = timeout - 1;
+                end
+                if (timeout == 0) begin
+                    fail_test("Step 12 BVALID held: timeout waiting for AW/W ready.");
+                end
+            end
+            @(posedge s00_axi_aclk);
+            s00_axi_awvalid = 0;
+            s00_axi_wvalid = 0;
+            s00_axi_wstrb = 0;
+            begin
+                integer timeout;
+                timeout = 1000;
+                @(posedge s00_axi_aclk);
+                while (!s00_axi_bvalid && timeout > 0) begin
+                    @(posedge s00_axi_aclk);
+                    timeout = timeout - 1;
+                end
+                if (timeout == 0) begin
+                    fail_test("Step 12 BVALID held: timeout waiting for BVALID.");
+                end
+            end
+            pulse_s00_reset("Step 12 reset while BVALID held");
+            post_reset_write_read("Step 12 post BVALID reset", 32'h1200_0003);
+        end
+
+        // C12.9: Reset while RVALID held
+        begin
+            axi_write_same_cycle(REG_FREQUENCY_IDX, 32'hCAFE_0004, 4'hF);
+            s00_axi_araddr = REG_FREQUENCY_IDX;
+            s00_axi_arprot = 3'h0;
+            s00_axi_arvalid = 1;
+            s00_axi_rready = 0;
+            begin
+                integer timeout;
+                timeout = 1000;
+                while (!s00_axi_arready && timeout > 0) begin
+                    @(posedge s00_axi_aclk);
+                    timeout = timeout - 1;
+                end
+                if (timeout == 0) begin
+                    fail_test("Step 12 RVALID held: timeout waiting for ARREADY.");
+                end
+            end
+            @(posedge s00_axi_aclk);
+            s00_axi_arvalid = 0;
+            begin
+                integer timeout;
+                timeout = 1000;
+                @(posedge s00_axi_aclk);
+                while (!s00_axi_rvalid && timeout > 0) begin
+                    @(posedge s00_axi_aclk);
+                    timeout = timeout - 1;
+                end
+                if (timeout == 0) begin
+                    fail_test("Step 12 RVALID held: timeout waiting for RVALID.");
+                end
+            end
+            pulse_s00_reset("Step 12 reset while RVALID held");
+            post_reset_write_read("Step 12 post RVALID reset", 32'h1200_0004);
+        end
+
+        $display("Step 12 reset during partial transaction checks completed.");
+
+        // Step 13: Verify CTRL PPS Side Effect
+
+        // C13.2: Write CTRL = 0x3 to set user_reset_s00=1 and enable_next_pps_s00=1
+        axi_write_same_cycle(REG_CTRL, 32'h0000_0003, 4'hF);
+        expect_read(REG_CTRL, 32'h0000_0003, "Step 13 CTRL set user_reset and enable_next_pps");
+
+        // Ensure bus is fully idle with extra margin
+        clear_s00_master_signals();
+        repeat(10) @(posedge s00_axi_aclk);
+
+        // C13.3: Pulse pps_comp, aligned to S01 clock for reliable edge detection.
+        @(posedge s01_axis_aclk);
+        #1;
+        pps_comp = 1;
+        @(posedge s01_axis_aclk);
+        @(posedge s01_axis_aclk);
+        pps_comp = 0;
+        @(posedge s01_axis_aclk);
+
+        // Wait for all CDC sync to complete (at least 10 us is more than enough)
+        #10000;
+
+        // Sync to S00 clock edge before readback to avoid scheduling race
+        @(posedge s00_axi_aclk);
+        @(posedge s00_axi_aclk);
+
+        // C13.4: Final readback: CTRL[1:0] must both be cleared (0x0)
+        expect_read(REG_CTRL, 32'h0000_0000, "Step 13 CTRL cleared after PPS side effect");
+
+        $display("Step 13 CTRL PPS side effect checks completed.");
 
         // Final pass/fail
         if (total_failures == 0) begin
@@ -702,6 +863,12 @@ module adc_to_udp_stream_axi_tb;
                 @(posedge s00_axi_aclk);
                 timeout = timeout - 1;
             end
+            if (timeout == 0) begin
+                fail_test("axi_read: RVALID did not clear after RREADY handshake.");
+            end
+            if (!s00_axi_arready) begin
+                fail_test("axi_read: ARREADY did not recover after RVALID cleared.");
+            end
         end
     endtask
 
@@ -790,6 +957,76 @@ module adc_to_udp_stream_axi_tb;
                 @(posedge s00_axi_aclk);
                 timeout = timeout - 1;
             end
+            if (timeout == 0) begin
+                fail_test("axi_read_rready_stall: RVALID did not clear after RREADY handshake.");
+            end
+            if (!s00_axi_arready) begin
+                fail_test("axi_read_rready_stall: ARREADY did not recover after RVALID cleared.");
+            end
+        end
+    endtask
+
+    // C12.2: clear_s00_master_signals
+    task clear_s00_master_signals;
+        begin
+            s00_axi_awvalid = 0;
+            s00_axi_wvalid = 0;
+            s00_axi_bready = 0;
+            s00_axi_arvalid = 0;
+            s00_axi_rready = 0;
+            s00_axi_wstrb = 0;
+            s00_axi_awaddr = {C_S00_AXI_ADDR_WIDTH{1'b0}};
+            s00_axi_wdata = {C_S00_AXI_DATA_WIDTH{1'b0}};
+            s00_axi_araddr = {C_S00_AXI_ADDR_WIDTH{1'b0}};
+            s00_axi_awprot = 3'h0;
+            s00_axi_arprot = 3'h0;
+        end
+    endtask
+
+    // C12.3: check_s00_idle
+    task check_s00_idle;
+        input string label;
+        begin
+            if (s00_axi_awready !== 1) begin
+                fail_test($sformatf("%s: AWREADY!=1 (actual=%b).", label, s00_axi_awready));
+            end
+            if (s00_axi_wready !== 1) begin
+                fail_test($sformatf("%s: WREADY!=1 (actual=%b).", label, s00_axi_wready));
+            end
+            if (s00_axi_arready !== 1) begin
+                fail_test($sformatf("%s: ARREADY!=1 (actual=%b).", label, s00_axi_arready));
+            end
+            if (s00_axi_bvalid !== 0) begin
+                fail_test($sformatf("%s: BVALID!=0 (actual=%b).", label, s00_axi_bvalid));
+            end
+            if (s00_axi_rvalid !== 0) begin
+                fail_test($sformatf("%s: RVALID!=0 (actual=%b).", label, s00_axi_rvalid));
+            end
+        end
+    endtask
+
+    // C12.4: pulse_s00_reset
+    task pulse_s00_reset;
+        input string label;
+        begin
+            s00_axi_aresetn = 0;
+            clear_s00_master_signals();
+            repeat(3) @(posedge s00_axi_aclk);
+            s00_axi_aresetn = 1;
+            repeat(5) @(posedge s00_axi_aclk);
+            check_s00_idle(label);
+            expect_read(REG_CTRL, 32'h0000_0001, $sformatf("%s CTRL after reset", label));
+            expect_read(REG_FREQUENCY_IDX, 32'h0000_0000, $sformatf("%s FREQUENCY_IDX after reset", label));
+        end
+    endtask
+
+    // C12.5: post_reset_write_read
+    task post_reset_write_read;
+        input string label;
+        input [C_S00_AXI_DATA_WIDTH-1:0] data;
+        begin
+            axi_write_same_cycle(REG_FREQUENCY_IDX, data, 4'hF);
+            expect_read(REG_FREQUENCY_IDX, data, label);
         end
     endtask
 
