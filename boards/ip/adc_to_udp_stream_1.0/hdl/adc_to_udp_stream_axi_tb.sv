@@ -356,6 +356,35 @@ module adc_to_udp_stream_axi_tb;
 
         $display("Step 10 WSTRB byte-lane checks completed.");
 
+        // Step 11: Verify Read Backpressure
+
+        // C11.1-C11.3: Read stall for FREQUENCY_IDX with RREADY=0
+        // First write a known value
+        axi_write_same_cycle(REG_FREQUENCY_IDX, 32'h5566_7788, 4'hF);
+        // Read with RREADY stalled for 5 cycles after RVALID
+        begin
+            reg [31:0] stalled_rdata;
+            axi_read_rready_stall(REG_FREQUENCY_IDX, stalled_rdata, 5);
+            if (stalled_rdata !== 32'h5566_7788) begin
+                fail_test($sformatf("Step 11 RREADY stall FREQUENCY_IDX: expected 0x55667788 actual 0x%08h", stalled_rdata));
+            end else begin
+                $display("PASS: Step 11 RREADY stall FREQUENCY_IDX data stable (5 cycles)");
+            end
+        end
+
+        // C11.4: Same stall test for an invalid address returning zero
+        begin
+            reg [31:0] inv_rdata;
+            axi_read_rready_stall(7'h01, inv_rdata, 5);
+            if (inv_rdata !== 32'h0000_0000) begin
+                fail_test($sformatf("Step 11 RREADY stall invalid addr: expected 0x00000000 actual 0x%08h", inv_rdata));
+            end else begin
+                $display("PASS: Step 11 RREADY stall invalid address data stable (5 cycles)");
+            end
+        end
+
+        $display("Step 11 read backpressure checks completed.");
+
         // Final pass/fail
         if (total_failures == 0) begin
             $display("PASS: all S00 AXI smoke tests passed (0 failures).");
