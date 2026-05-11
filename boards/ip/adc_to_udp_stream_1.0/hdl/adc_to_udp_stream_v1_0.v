@@ -335,7 +335,6 @@ module adc_to_udp_stream_v1_0 #
     wire capture_enable_s01;
     wire fifo_0_ready_s01;
     wire fifo_1_ready_s01;
-    wire s01_axis_accept_s01;
 
     initial begin
         fifo_0_empty_latched = 1'b0;
@@ -350,7 +349,9 @@ module adc_to_udp_stream_v1_0 #
             fifo_0_reset <= 1;
             fifo_1_reset <= 1;
         end else begin
-            if (s01_axis_accept_s01) begin
+            // Legacy packet-byte behavior depends on the source advancing when
+            // TVALID is asserted, even if a FIFO reset-busy window prevents storage.
+            if (s01_axis_tvalid) begin
                 received_counter_s01 <= received_counter_s01 + 1;
             end
 
@@ -383,12 +384,11 @@ module adc_to_udp_stream_v1_0 #
     assign fifo_1_rst_combined_s01 = fifo_1_rst_busy_s01 || fifo_1_rst_busy_latched_s01;
 
     assign capture_enable_s01 = !user_reset_s01 || pps_detect_s01;
-    assign fifo_0_ready_s01 = s01_axis_aresetn && !user_reset_s01 && capture_enable_s01 && !fifo_0_rst_combined_s01 && !fifo_0_full_raw_s01;
-    assign fifo_1_ready_s01 = s01_axis_aresetn && !user_reset_s01 && capture_enable_s01 && !fifo_1_rst_combined_s01 && !fifo_1_full_raw_s01;
-    assign s01_axis_tready = buffer_select_s01 ? fifo_1_ready_s01 : fifo_0_ready_s01;
-    assign s01_axis_accept_s01 = s01_axis_tvalid && s01_axis_tready;
-    assign fifo_0_write_en_s01 = s01_axis_accept_s01 && !buffer_select_s01;
-    assign fifo_1_write_en_s01 = s01_axis_accept_s01 && buffer_select_s01;
+    assign fifo_0_ready_s01 = s01_axis_aresetn && capture_enable_s01 && !fifo_0_rst_combined_s01;
+    assign fifo_1_ready_s01 = s01_axis_aresetn && capture_enable_s01 && !fifo_1_rst_combined_s01;
+    assign s01_axis_tready = 1'b1;
+    assign fifo_0_write_en_s01 = s01_axis_tvalid && fifo_0_ready_s01 && !buffer_select_s01;
+    assign fifo_1_write_en_s01 = s01_axis_tvalid && fifo_1_ready_s01 && buffer_select_s01;
 
     // Flag fifo full transition for a single cycle
     always @(posedge m00_axis_aclk) begin

@@ -17,7 +17,7 @@ module adc_to_udp_stream_axis_tb;
     parameter integer C_M00_AXIS_TKEEP_WIDTH = 8;
     parameter integer UDP_PORT = 60133;
 
-    localparam integer NUM_INPUT_BEATS = 4096 + 50;
+    localparam integer NUM_INPUT_BEATS = 6144;
     localparam integer WORDS_PER_PACKET = 4096;
     localparam integer EXPECTED_PKT_BYTES = 8298;
     localparam integer EXPECTED_PAYLOAD_BYTES = 8192;
@@ -152,6 +152,10 @@ module adc_to_udp_stream_axis_tb;
     integer payload_stall_done;
     integer final_stall_done;
     integer payload_start_delta;
+    integer s01_hold_cycles;
+    integer s01_hold_events;
+    integer s01_bubble_cycles;
+    integer s01_bubble_events;
 
     reg prev_m00_tvalid;
     reg prev_m00_tready;
@@ -209,7 +213,7 @@ module adc_to_udp_stream_axis_tb;
     end
 
     initial begin
-        #500us;
+        #1ms;
         if (!test_done) begin
             $display("FAIL: AXIS scaffold timeout: verified_packets=%0d protocol_failures=%0d byte_check_failures=%0d",
                      verified_packets, protocol_failures, byte_check_failures);
@@ -297,6 +301,8 @@ module adc_to_udp_stream_axis_tb;
         integer gap;
         begin
             s01_axis_tvalid = 1'b0;
+            s01_bubble_events = s01_bubble_events + 1;
+            s01_bubble_cycles = s01_bubble_cycles + cycles;
             $display("[AXIS] Starting S01 TVALID bubble after accepted_beats=%0d location=%0s cycles=%0d time=%0t",
                      accepted_s01_beats, label, cycles, $time);
             for (gap = 0; gap < cycles; gap = gap + 1) begin
@@ -316,13 +322,22 @@ module adc_to_udp_stream_axis_tb;
 
     task automatic drive_s01_accepted_word;
         reg [63:0] word;
+        integer held_cycles;
         begin
             make_s01_word(word);
             s01_axis_tdata = word;
             s01_axis_tvalid = 1'b1;
+            held_cycles = 0;
             do begin
                 @(posedge s01_axis_aclk);
+                if (!s01_axis_tready) begin
+                    held_cycles = held_cycles + 1;
+                end
             end while (!s01_axis_tready);
+            if (held_cycles > 0) begin
+                s01_hold_events = s01_hold_events + 1;
+                s01_hold_cycles = s01_hold_cycles + held_cycles;
+            end
             record_accepted_s01_word(word);
             drive_sample_count = drive_sample_count + 4;
         end
@@ -461,6 +476,10 @@ module adc_to_udp_stream_axis_tb;
         payload_stall_done = 0;
         final_stall_done = 0;
         payload_start_delta = -1;
+        s01_hold_cycles = 0;
+        s01_hold_events = 0;
+        s01_bubble_cycles = 0;
+        s01_bubble_events = 0;
     end
 
     function automatic integer find_accepted_sample_index;
@@ -722,6 +741,10 @@ module adc_to_udp_stream_axis_tb;
             end
             $display("[AXIS] accepted_s01_beats=%0d completed_m00_beats=%0d verified_packets=%0d",
                      accepted_s01_beats, completed_m00_beats, verified_packets);
+            $display("[AXIS] s01_hold_events=%0d s01_hold_cycles=%0d",
+                     s01_hold_events, s01_hold_cycles);
+            $display("[AXIS] s01_bubble_events=%0d s01_bubble_cycles=%0d",
+                     s01_bubble_events, s01_bubble_cycles);
             $display("[AXIS] stall_done header=%0d radio=%0d payload=%0d final=%0d",
                      header_stall_done, radio_stall_done, payload_stall_done, final_stall_done);
             if ((protocol_failures == 0) && (byte_check_failures == 0)) begin
