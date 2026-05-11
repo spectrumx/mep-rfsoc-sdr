@@ -133,10 +133,12 @@ module adc_to_udp_stream_axis_tb;
     reg [63:0] tdata_collected [0:2047];
     reg [7:0] tkeep_collected [0:2047];
     reg [7:0] pkt_byte_stream [0:16383];
+    reg [15:0] accepted_sample_words [0:(NUM_INPUT_BEATS*4)-1];
     integer beat_count;
     integer pkt_byte_count;
     integer packet_index;
     integer drive_sample_count;
+    integer accepted_sample_count;
     integer accepted_s01_beats;
     integer completed_m00_beats;
     integer verified_packets;
@@ -173,6 +175,7 @@ module adc_to_udp_stream_axis_tb;
         s01_axis_tdata = {C_S01_AXIS_TDATA_WIDTH{1'b0}};
         m00_axis_tready = 1'b1;
         drive_sample_count = 0;
+        accepted_sample_count = 0;
         accepted_s01_beats = 0;
         input_done = 0;
         test_done = 0;
@@ -199,7 +202,8 @@ module adc_to_udp_stream_axis_tb;
         @(posedge m00_axis_aresetn);
         #100ns;
         drive_sample_count = 0;
-        drive_s01_continuous_v2(NUM_INPUT_BEATS);
+        accepted_sample_count = 0;
+        drive_s01_phase5_bubbles(NUM_INPUT_BEATS);
         input_done = 1;
     end
 
@@ -256,6 +260,96 @@ module adc_to_udp_stream_axis_tb;
             s4 = drive_sample_count[15:0] + 16'd3;
             word = {s4, s3, s2, s1};
             drive_sample_count = drive_sample_count + 4;
+        end
+    endtask
+
+    task automatic make_s01_word;
+        output [63:0] word;
+        reg [15:0] s1;
+        reg [15:0] s2;
+        reg [15:0] s3;
+        reg [15:0] s4;
+        begin
+            s1 = drive_sample_count[15:0];
+            s2 = drive_sample_count[15:0] + 16'd1;
+            s3 = drive_sample_count[15:0] + 16'd2;
+            s4 = drive_sample_count[15:0] + 16'd3;
+            word = {s4, s3, s2, s1};
+        end
+    endtask
+
+    task automatic record_accepted_s01_word;
+        input [63:0] word;
+        begin
+            accepted_sample_words[accepted_sample_count + 0] = word[15:0];
+            accepted_sample_words[accepted_sample_count + 1] = word[31:16];
+            accepted_sample_words[accepted_sample_count + 2] = word[47:32];
+            accepted_sample_words[accepted_sample_count + 3] = word[63:48];
+            accepted_sample_count = accepted_sample_count + 4;
+            accepted_s01_beats = accepted_s01_beats + 1;
+        end
+    endtask
+
+    task automatic insert_s01_bubble;
+        input integer cycles;
+        input [8*48-1:0] label;
+        integer gap;
+        begin
+            s01_axis_tvalid = 1'b0;
+            $display("[AXIS] Starting S01 TVALID bubble after accepted_beats=%0d location=%0s cycles=%0d time=%0t",
+                     accepted_s01_beats, label, cycles, $time);
+            for (gap = 0; gap < cycles; gap = gap + 1) begin
+                @(posedge s01_axis_aclk);
+            end
+        end
+    endtask
+
+    function automatic should_insert_prbs_bubble;
+        input integer sent;
+        reg [31:0] mixed;
+        begin
+            mixed = (sent * 32'd1103515245) + 32'd12345;
+            should_insert_prbs_bubble = (sent > 1200) && (sent < (NUM_INPUT_BEATS - 16)) && (mixed[7:0] == 8'h5A);
+        end
+    endfunction
+
+    task automatic drive_s01_accepted_word;
+        reg [63:0] word;
+        begin
+            make_s01_word(word);
+            s01_axis_tdata = word;
+            s01_axis_tvalid = 1'b1;
+            do begin
+                @(posedge s01_axis_aclk);
+            end while (!s01_axis_tready);
+            record_accepted_s01_word(word);
+            drive_sample_count = drive_sample_count + 4;
+        end
+    endtask
+
+    task automatic drive_s01_phase5_bubbles;
+        input integer beats;
+        integer sent;
+        begin
+            sent = 0;
+            while (sent < beats) begin
+                if (sent == 37) begin
+                    insert_s01_bubble(3, "before first packet fill");
+                end
+                if (sent == 1023) begin
+                    insert_s01_bubble(2, "before first FIFO boundary");
+                end
+                if (sent == 1024) begin
+                    insert_s01_bubble(3, "after first FIFO boundary");
+                end
+                if (should_insert_prbs_bubble(sent)) begin
+                    insert_s01_bubble(1 + (sent % 3), "deterministic pseudo-random");
+                end
+                drive_s01_accepted_word();
+                sent = sent + 1;
+            end
+            @(posedge s01_axis_aclk);
+            s01_axis_tvalid = 1'b0;
         end
     endtask
 
@@ -512,6 +606,7 @@ module adc_to_udp_stream_axis_tb;
         integer b;
         integer fail_count;
         integer first_fail;
+        integer expected_sample_index;
         reg [15:0] exp_word;
         reg [7:0] exp_byte;
         reg [7:0] act_byte;
@@ -528,10 +623,20 @@ module adc_to_udp_stream_axis_tb;
             end
 
             for (b = 0; b < EXPECTED_PAYLOAD_BYTES; b = b + 1) begin
-                exp_word = (pkt_num * WORDS_PER_PACKET) + 16'h004C + (b / 2);
-                exp_byte = ((b % 2) == 0) ? exp_word[7:0] : exp_word[15:8];
+                expected_sample_index = (pkt_num * WORDS_PER_PACKET) + 16'h004C + (b / 2);
+                if (expected_sample_index < accepted_sample_count) begin
+                    exp_word = accepted_sample_words[expected_sample_index];
+                    exp_byte = ((b % 2) == 0) ? exp_word[7:0] : exp_word[15:8];
+                end else begin
+                    exp_word = 16'h0;
+                    exp_byte = 8'h0;
+                    fail_count = fail_count + 1;
+                    if (first_fail == -1) begin
+                        first_fail = b;
+                    end
+                end
                 act_byte = pkt_byte_stream[PAYLOAD_BYTE_OFFSET + b];
-                if (act_byte !== exp_byte) begin
+                if ((expected_sample_index < accepted_sample_count) && (act_byte !== exp_byte)) begin
                     fail_count = fail_count + 1;
                     if (first_fail == -1) begin
                         first_fail = b;
@@ -544,11 +649,17 @@ module adc_to_udp_stream_axis_tb;
             end else begin
                 byte_check_failures = byte_check_failures + fail_count;
                 if (first_fail >= 0) begin
-                    exp_word = (pkt_num * WORDS_PER_PACKET) + 16'h004C + (first_fail / 2);
-                    exp_byte = ((first_fail % 2) == 0) ? exp_word[7:0] : exp_word[15:8];
+                    expected_sample_index = (pkt_num * WORDS_PER_PACKET) + 16'h004C + (first_fail / 2);
                     act_byte = pkt_byte_stream[PAYLOAD_BYTE_OFFSET + first_fail];
-                    $display("FAIL: Packet %0d payload mismatches=%0d first_payload_byte=%0d expected=0x%02x actual=0x%02x",
-                             pkt_num, fail_count, first_fail, exp_byte, act_byte);
+                    if (expected_sample_index < accepted_sample_count) begin
+                        exp_word = accepted_sample_words[expected_sample_index];
+                        exp_byte = ((first_fail % 2) == 0) ? exp_word[7:0] : exp_word[15:8];
+                        $display("FAIL: Packet %0d payload mismatches=%0d first_payload_byte=%0d expected=0x%02x actual=0x%02x",
+                                 pkt_num, fail_count, first_fail, exp_byte, act_byte);
+                    end else begin
+                        $display("FAIL: Packet %0d payload mismatches=%0d first_payload_byte=%0d expected_sample_index=%0d accepted_sample_count=%0d actual=0x%02x",
+                                 pkt_num, fail_count, first_fail, expected_sample_index, accepted_sample_count, act_byte);
+                    end
                 end else begin
                     $display("FAIL: Packet %0d byte count mismatch", pkt_num);
                 end
