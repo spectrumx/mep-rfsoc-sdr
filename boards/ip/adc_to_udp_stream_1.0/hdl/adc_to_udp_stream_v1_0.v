@@ -900,6 +900,9 @@ module adc_to_udp_stream_v1_0 #
     assign s00_axi_bresp = 2'b00;
     assign s00_axi_rresp = 2'b00;
 
+    // Merge AXI byte-lane writes into a 32-bit register image. Each WSTRB bit
+    // selects the corresponding byte from the incoming write data; unselected
+    // bytes retain the current register value.
     function automatic [31:0] apply_wstrb;
         input [31:0] old_value;
         input [31:0] new_value;
@@ -935,7 +938,12 @@ module adc_to_udp_stream_v1_0 #
     assign sample_idx_msb_word = sample_idx_offset[63:32];
 
     //////////////////////////////////////////////////////////////////////////
-    // Step 2: Hardened write-channel state (independent AW/W acceptance)
+    // AXI4-Lite handshake state
+    //
+    // AW and W are accepted independently and held until a single register
+    // write can be committed. BVALID stays asserted until the master accepts
+    // the response. The read channel accepts one address at a time and holds
+    // RVALID/RDATA stable until RREADY.
     //////////////////////////////////////////////////////////////////////////
 
     reg [C_S00_AXI_ADDR_WIDTH-1:0] pending_aw_addr;
@@ -1042,7 +1050,8 @@ module adc_to_udp_stream_v1_0 #
         .signal_clk1(received_counter_m00)
     );
 
-    // Write Logic
+    // Register write side effects. Read-only and unsupported offsets complete
+    // with an OKAY write response but leave writable state unchanged.
     always @(posedge s00_axi_aclk or negedge s00_axi_aresetn) begin
         if (~s00_axi_aresetn) begin
             eth_dst_mac[0] <= 8'hFF;
@@ -1134,6 +1143,8 @@ module adc_to_udp_stream_v1_0 #
 
     assign s00_axi_rvalid = rvalid_reg;
 
+    // Register readback mux. The selected data is captured when AR handshakes
+    // and remains stable while the read response is pending.
     always @(posedge s00_axi_aclk or negedge s00_axi_aresetn) begin
         if (!s00_axi_aresetn) begin
             araddr_latch <= {C_S00_AXI_ADDR_WIDTH{1'b0}};
