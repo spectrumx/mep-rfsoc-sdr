@@ -770,11 +770,8 @@ module adc_to_udp_stream_v1_0 #
     );
 
     reg udp_packet_axis_valid;
-    reg udp_packet_axis_last;
-    reg [C_M00_AXIS_TKEEP_WIDTH-1:0] udp_packet_axis_keep;
     wire udp_packet_axis_tvalid = udp_packet_axis_valid && capture_enable_m00;
-    wire m00_axis_fire = udp_packet_axis_tvalid && m00_axis_tready;
-    wire m00_axis_can_load = !udp_packet_axis_valid || m00_axis_fire;
+    wire m00_axis_can_load = m00_axis_tready;
 
     always @(posedge m00_axis_aclk or negedge m00_axis_aresetn) begin
         if (~m00_axis_aresetn || user_reset_m00) begin
@@ -849,12 +846,7 @@ module adc_to_udp_stream_v1_0 #
             udp_packet_axis_data <= 16'b0; // default to 0
             fifo_out_data_prev <= 16'b0; // default to 0
             udp_packet_axis_valid <= 1'b0;
-            udp_packet_axis_last <= 1'b0;
-            udp_packet_axis_keep <= {C_M00_AXIS_TKEEP_WIDTH{1'b0}};
         end else if (m00_axis_can_load) begin
-            udp_packet_axis_last <= 1'b0;
-            udp_packet_axis_keep <= 8'hFF;
-
             // First transaction
             if (start_udp_header && !in_udp_header) begin
                 // Prefetch tdata one cycle before asserting TVALID, preserving
@@ -865,23 +857,16 @@ module adc_to_udp_stream_v1_0 #
             // If read enable is active, assign AXIS buffer to FIFO output
                 udp_packet_axis_valid <= 1'b1;
                 udp_packet_axis_data <= udp_packet[packet_state];
-                udp_packet_axis_last <= (packet_state == FINAL_STATE);
-                udp_packet_axis_keep <= (packet_state == FINAL_STATE) ? 8'h03 : 8'hFF;
             end else if(fifo_0_read_en) begin
                 udp_packet_axis_valid <= 1'b1;
                 fifo_out_data_prev <= fifo_0_out_data;
                 udp_packet_axis_data <= {fifo_0_out_data[47:0], fifo_out_data_prev[63:48]};
-                udp_packet_axis_last <= (packet_state == FINAL_STATE);
-                udp_packet_axis_keep <= (packet_state == FINAL_STATE) ? 8'h03 : 8'hFF;
             end else if(fifo_1_read_en) begin
                 udp_packet_axis_valid <= 1'b1;
                 fifo_out_data_prev <= fifo_1_out_data;
                 udp_packet_axis_data <= {fifo_1_out_data[47:0], fifo_out_data_prev[63:48]};
-                udp_packet_axis_last <= (packet_state == FINAL_STATE);
-                udp_packet_axis_keep <= (packet_state == FINAL_STATE) ? 8'h03 : 8'hFF;
             end else begin
                 udp_packet_axis_valid <= 1'b0;
-                udp_packet_axis_data <= 64'h0;
             end
         end
     end
@@ -890,8 +875,8 @@ module adc_to_udp_stream_v1_0 #
     assign m00_axis_tvalid = udp_packet_axis_tvalid; // Valid when we're in the middle of sending the packet
     assign m00_axis_tdata = udp_packet_axis_data;       // Transmit each 64-bit word of the UDP packet
     assign m00_axis_tuser = 1'b0;
-    assign m00_axis_tlast = udp_packet_axis_last;       // Mark the last word of the packet
-    assign m00_axis_tkeep = udp_packet_axis_keep;
+    assign m00_axis_tlast = (packet_state == FINAL_STATE) && m00_axis_tvalid; // Mark the last word of the packet
+    assign m00_axis_tkeep = m00_axis_tlast ? 8'h03 : 8'hFF;
 
     assign s01_axis_tready = 1'b1;
 
