@@ -285,6 +285,77 @@ module adc_to_udp_stream_axi_tb;
 
         $display("Step 9 independent AW/W checks completed.");
 
+        // Step 10: Verify WSTRB Byte-Lane Behavior
+
+        // C10.1: FREQUENCY_IDX as primary 32-bit WSTRB target
+
+        // C10.2: byte-lane writes to FREQUENCY_IDX
+        axi_write_wstrb(REG_FREQUENCY_IDX, 32'hAA_BB_CC_DD, 4'hF);
+        expect_read(REG_FREQUENCY_IDX, 32'hAA_BB_CC_DD, "Step 10 WSTRB full write to FREQUENCY_IDX");
+
+        // Byte0 only (strobe 4'h1)
+        axi_write_wstrb(REG_FREQUENCY_IDX, 32'h11_22_33_44, 4'h1);
+        expect_read(REG_FREQUENCY_IDX, 32'hAA_BB_CC_44, "Step 10 WSTRB byte0 only");
+
+        // Byte1 only (strobe 4'h2) -> new[15:8]=0x33 from data 0x1122_3344
+        axi_write_wstrb(REG_FREQUENCY_IDX, 32'h11_22_33_44, 4'h2);
+        expect_read(REG_FREQUENCY_IDX, 32'hAA_BB_33_44, "Step 10 WSTRB byte1 only");
+
+        // Byte2 only (strobe 4'h4) -> new[23:16]=0x22 from data 0x1122_3344
+        axi_write_wstrb(REG_FREQUENCY_IDX, 32'h11_22_33_44, 4'h4);
+        expect_read(REG_FREQUENCY_IDX, 32'hAA_22_33_44, "Step 10 WSTRB byte2 only");
+
+        // Byte3 only (strobe 4'h8) -> new[31:24]=0x11 from data 0x1122_3344
+        axi_write_wstrb(REG_FREQUENCY_IDX, 32'h11_22_33_44, 4'h8);
+        expect_read(REG_FREQUENCY_IDX, 32'h11_22_33_44, "Step 10 WSTRB byte3 only");
+
+        // Zero-strobe (all bytes preserved)
+        axi_write_wstrb(REG_FREQUENCY_IDX, 32'hFF_FF_FF_FF, 4'h0);
+        expect_read(REG_FREQUENCY_IDX, 32'h11_22_33_44, "Step 10 WSTRB zero strobe preserves data");
+
+        // Mixed-strobe: bytes 0 and 3 (strobe 4'h9) -> new[7:0]=0xF3, new[31:24]=0xF0
+        axi_write_wstrb(REG_FREQUENCY_IDX, 32'hF0_F1_F2_F3, 4'h9);
+        expect_read(REG_FREQUENCY_IDX, 32'hF0_22_33_F3, "Step 10 WSTRB mixed strobe bytes 0,3");
+
+        // Mixed-strobe: bytes 1 and 2 (strobe 4'h6)
+        axi_write_wstrb(REG_FREQUENCY_IDX, 32'hA0_A1_A2_A3, 4'h6);
+        expect_read(REG_FREQUENCY_IDX, 32'hF0_A1_A2_F3, "Step 10 WSTRB mixed strobe bytes 1,2");
+
+        // Mixed-strobe: bytes 0,1,2 (strobe 4'h7)
+        axi_write_wstrb(REG_FREQUENCY_IDX, 32'hB0_B1_B2_B3, 4'h7);
+        expect_read(REG_FREQUENCY_IDX, 32'hF0_B1_B2_B3, "Step 10 WSTRB mixed strobe bytes 0,1,2");
+
+        // C10.3: Reduced WSTRB tests for CTRL
+        axi_write_wstrb(REG_CTRL, 32'h0000_0000, 4'hF);
+        expect_read(REG_CTRL, 32'h0000_0000, "Step 10 CTRL full write to zero");
+
+        // Write byte0 only (strobe 4'h1) to set user_reset_s00 and enable_next_pps_s00
+        axi_write_wstrb(REG_CTRL, 32'h0000_0003, 4'h1);
+        expect_read(REG_CTRL, 32'h0000_0003, "Step 10 CTRL WSTRB byte0 sets bits [1:0]");
+
+        // Clear with byte0 only
+        axi_write_wstrb(REG_CTRL, 32'h0000_0000, 4'h1);
+        expect_read(REG_CTRL, 32'h0000_0000, "Step 10 CTRL WSTRB byte0 clears bits [1:0]");
+
+        // C10.4: Reduced WSTRB tests for one 16-bit UDP port register
+        axi_write_wstrb(REG_IP_DST_PORT, 32'h0000_CDEF, 4'hF);
+        expect_read(REG_IP_DST_PORT, 32'h0000_CDEF, "Step 10 IP_DST_PORT full write");
+
+        // byte1 of word = port high byte (udp_header[2]); byte0 of word = port low byte (udp_header[3])
+        // Write only byte0 (port low byte in merged word = udp_header[3]) with strobe 0x1
+        axi_write_wstrb(REG_IP_DST_PORT, 32'h0000_FF12, 4'h1);
+        expect_read(REG_IP_DST_PORT, 32'h0000_CD12, "Step 10 IP_DST_PORT WSTRB byte0 (port low byte)");
+
+        // Write only byte1 (port high byte) with strobe 0x2
+        axi_write_wstrb(REG_IP_DST_PORT, 32'h0000_3400, 4'h2);
+        expect_read(REG_IP_DST_PORT, 32'h0000_3412, "Step 10 IP_DST_PORT WSTRB byte1 (port high byte)");
+
+        // Zero-strobe preserves port
+        axi_write_wstrb(REG_IP_DST_PORT, 32'h0000_FEED, 4'h0);
+        expect_read(REG_IP_DST_PORT, 32'h0000_3412, "Step 10 IP_DST_PORT zero strobe preserves data");
+
+        $display("Step 10 WSTRB byte-lane checks completed.");
+
         // Final pass/fail
         if (total_failures == 0) begin
             $display("PASS: all S00 AXI smoke tests passed (0 failures).");
