@@ -147,11 +147,12 @@ module adc_to_udp_stream_v1_0_tb;
 
     // Reset generation
     initial begin
-        s00_axi_aresetn = 1;
+        s00_axi_aresetn = 0;
         s01_axis_aresetn = 0;
         m00_axis_aresetn = 0;
         #20;                    // Deassert reset after 20 ns
-        m00_axis_aresetn = 1;  
+        s00_axi_aresetn = 1;
+        m00_axis_aresetn = 1;
         s01_axis_aresetn = 1;
     end
 

@@ -900,6 +900,40 @@ module adc_to_udp_stream_v1_0 #
     assign s00_axi_bresp = 2'b00;
     assign s00_axi_rresp = 2'b00;
 
+    function automatic [31:0] apply_wstrb;
+        input [31:0] old_value;
+        input [31:0] new_value;
+        input [3:0]  wstrb;
+        begin
+            apply_wstrb[7:0]   = wstrb[0] ? new_value[7:0]   : old_value[7:0];
+            apply_wstrb[15:8]  = wstrb[1] ? new_value[15:8]  : old_value[15:8];
+            apply_wstrb[23:16] = wstrb[2] ? new_value[23:16] : old_value[23:16];
+            apply_wstrb[31:24] = wstrb[3] ? new_value[31:24] : old_value[31:24];
+        end
+    endfunction
+
+    wire [31:0] ctrl_word;
+    wire [31:0] eth_dst_mac_lsb_word;
+    wire [31:0] eth_dst_mac_msb_word;
+    wire [31:0] ip_src_word;
+    wire [31:0] ip_dst_word;
+    wire [31:0] udp_src_port_word;
+    wire [31:0] udp_dst_port_word;
+
+    assign ctrl_word = {30'h0, enable_next_pps_s00, user_reset_s00};
+    assign eth_dst_mac_lsb_word = {eth_dst_mac_lsb[0], eth_dst_mac_lsb[1], eth_dst_mac_lsb[2], eth_dst_mac_lsb[3]};
+    assign eth_dst_mac_msb_word = {16'h0, eth_dst_mac[0], eth_dst_mac[1]};
+    assign ip_src_word = {ip_header[12], ip_header[13], ip_header[14], ip_header[15]};
+    assign ip_dst_word = {ip_header[16], ip_header[17], ip_header[18], ip_header[19]};
+    assign udp_src_port_word = {16'h0, udp_header[0], udp_header[1]};
+    assign udp_dst_port_word = {16'h0, udp_header[2], udp_header[3]};
+
+    wire [31:0] sample_idx_lsb_word;
+    wire [31:0] sample_idx_msb_word;
+
+    assign sample_idx_lsb_word = sample_idx_offset[31:0];
+    assign sample_idx_msb_word = sample_idx_offset[63:32];
+
     //////////////////////////////////////////////////////////////////////////
     // Step 2: Hardened write-channel state (independent AW/W acceptance)
     //////////////////////////////////////////////////////////////////////////
@@ -911,6 +945,36 @@ module adc_to_udp_stream_v1_0 #
     reg pending_w;
     reg bvalid_reg;
     wire write_commit = pending_aw && pending_w && !bvalid_reg;
+
+    wire [31:0] merged_ctrl;
+    wire [31:0] merged_freq_idx;
+    wire [31:0] merged_sample_idx_lsb;
+    wire [31:0] merged_sample_idx_msb;
+    wire [31:0] merged_sample_rate_num_lsb;
+    wire [31:0] merged_sample_rate_num_msb;
+    wire [31:0] merged_sample_rate_den_lsb;
+    wire [31:0] merged_sample_rate_den_msb;
+    wire [31:0] merged_eth_dst_mac_lsb;
+    wire [31:0] merged_eth_dst_mac_msb;
+    wire [31:0] merged_ip_src;
+    wire [31:0] merged_ip_dst;
+    wire [31:0] merged_udp_src_port;
+    wire [31:0] merged_udp_dst_port;
+
+    assign merged_ctrl            = apply_wstrb(ctrl_word, pending_w_data, pending_w_strb);
+    assign merged_freq_idx        = apply_wstrb(frequency_idx, pending_w_data, pending_w_strb);
+    assign merged_sample_idx_lsb  = apply_wstrb(sample_idx_lsb_word, pending_w_data, pending_w_strb);
+    assign merged_sample_idx_msb  = apply_wstrb(sample_idx_msb_word, pending_w_data, pending_w_strb);
+    assign merged_sample_rate_num_lsb = apply_wstrb(sample_rate_numerator[31:0], pending_w_data, pending_w_strb);
+    assign merged_sample_rate_num_msb = apply_wstrb(sample_rate_numerator[63:32], pending_w_data, pending_w_strb);
+    assign merged_sample_rate_den_lsb = apply_wstrb(sample_rate_denominator[31:0], pending_w_data, pending_w_strb);
+    assign merged_sample_rate_den_msb = apply_wstrb(sample_rate_denominator[63:32], pending_w_data, pending_w_strb);
+    assign merged_eth_dst_mac_lsb = apply_wstrb(eth_dst_mac_lsb_word, pending_w_data, pending_w_strb);
+    assign merged_eth_dst_mac_msb = apply_wstrb(eth_dst_mac_msb_word, pending_w_data, pending_w_strb);
+    assign merged_ip_src          = apply_wstrb(ip_src_word, pending_w_data, pending_w_strb);
+    assign merged_ip_dst          = apply_wstrb(ip_dst_word, pending_w_data, pending_w_strb);
+    assign merged_udp_src_port    = apply_wstrb(udp_src_port_word, pending_w_data, pending_w_strb);
+    assign merged_udp_dst_port    = apply_wstrb(udp_dst_port_word, pending_w_data, pending_w_strb);
 
     assign s00_axi_awready = !pending_aw && !bvalid_reg;
     assign s00_axi_wready  = !pending_w  && !bvalid_reg;
@@ -977,98 +1041,92 @@ module adc_to_udp_stream_v1_0 #
     );
 
     // Write Logic
-    always @(posedge s00_axi_aclk) begin
+    always @(posedge s00_axi_aclk or negedge s00_axi_aresetn) begin
         if (~s00_axi_aresetn) begin
-            eth_dst_mac[0] = 8'hFF;
-            eth_dst_mac[1] = 8'hFF;
-            eth_dst_mac[2] = 8'hFF;
-            eth_dst_mac[3] = 8'hFF;
-            eth_dst_mac[4] = 8'hFF;
-            eth_dst_mac[5] = 8'hFF; // Broadcast MAC address
-            eth_dst_mac_lsb[0] = 8'h00;
-            eth_dst_mac_lsb[1] = 8'h00;
-            eth_dst_mac_lsb[2] = 8'h00;
-            eth_dst_mac_lsb[3] = 8'h00;
-            sample_rate_numerator[63:0] = 64'd1228800000; // Default 1.2288Gsps
-            sample_rate_denominator[63:0] = 64'd16; // Default 16x divisor
-            frequency_idx[31:0] = 32'd0;
+            eth_dst_mac[0] <= 8'hFF;
+            eth_dst_mac[1] <= 8'hFF;
+            eth_dst_mac[2] <= 8'hFF;
+            eth_dst_mac[3] <= 8'hFF;
+            eth_dst_mac[4] <= 8'hFF;
+            eth_dst_mac[5] <= 8'hFF;
+            eth_dst_mac_lsb[0] <= 8'h00;
+            eth_dst_mac_lsb[1] <= 8'h00;
+            eth_dst_mac_lsb[2] <= 8'h00;
+            eth_dst_mac_lsb[3] <= 8'h00;
+            sample_rate_numerator[63:0] <= 64'd1228800000;
+            sample_rate_denominator[63:0] <= 64'd16;
+            frequency_idx[31:0] <= 32'd0;
+            user_reset_s00 <= 1'b1;
+            enable_next_pps_s00 <= 1'b0;
         end else if (write_commit) begin
-            // Handle AXI write logic
             case (pending_aw_addr[6:0])
-                32'h0000_0000: begin
-                    user_reset_s00 <= pending_w_data[0];
-                    enable_next_pps_s00 <= pending_w_data[1];
+                REG_CTRL: begin
+                    user_reset_s00 <= merged_ctrl[0];
+                    enable_next_pps_s00 <= merged_ctrl[1];
                 end
-                32'h0000_0004: frequency_idx[31:0] <= pending_w_data[31:0];
-                32'h0000_000C: begin
-                    // Dest MAC LSB
-                    eth_dst_mac_lsb[3] <= pending_w_data[7:0];
-                    eth_dst_mac_lsb[2] <= pending_w_data[15:8];
-                    eth_dst_mac_lsb[1] <= pending_w_data[23:16];
-                    eth_dst_mac_lsb[0] <= pending_w_data[31:24];
+                REG_FREQUENCY_IDX: begin
+                    frequency_idx <= merged_freq_idx;
                 end
-                32'h0000_0010: begin
-                    // Dest MAC MSB - Update header
-                    eth_dst_mac[1] <= pending_w_data[7:0];
-                    eth_dst_mac[0] <= pending_w_data[15:8];
-
+                REG_ETH_DST_MAC_LSB: begin
+                    eth_dst_mac_lsb[0] <= merged_eth_dst_mac_lsb[31:24];
+                    eth_dst_mac_lsb[1] <= merged_eth_dst_mac_lsb[23:16];
+                    eth_dst_mac_lsb[2] <= merged_eth_dst_mac_lsb[15:8];
+                    eth_dst_mac_lsb[3] <= merged_eth_dst_mac_lsb[7:0];
+                end
+                REG_ETH_DST_MAC_MSB: begin
+                    eth_dst_mac[0] <= merged_eth_dst_mac_msb[15:8];
+                    eth_dst_mac[1] <= merged_eth_dst_mac_msb[7:0];
                     eth_dst_mac[2] <= eth_dst_mac_lsb[0];
                     eth_dst_mac[3] <= eth_dst_mac_lsb[1];
                     eth_dst_mac[4] <= eth_dst_mac_lsb[2];
                     eth_dst_mac[5] <= eth_dst_mac_lsb[3];
                 end
-                32'h0000_0014: begin
-                    // Source IP
-                    ip_header[15][7:0] <= pending_w_data[7:0];
-                    ip_header[14][7:0] <= pending_w_data[15:8];
-                    ip_header[13][7:0] <= pending_w_data[23:16];
-                    ip_header[12][7:0] <= pending_w_data[31:24];
+                REG_IP_SRC_ADDR: begin
+                    ip_header[12] <= merged_ip_src[31:24];
+                    ip_header[13] <= merged_ip_src[23:16];
+                    ip_header[14] <= merged_ip_src[15:8];
+                    ip_header[15] <= merged_ip_src[7:0];
                 end
-                32'h0000_0018: begin
-                    // Destination IP
-                    ip_header[19][7:0] <= pending_w_data[7:0];
-                    ip_header[18][7:0] <= pending_w_data[15:8];
-                    ip_header[17][7:0] <= pending_w_data[23:16];
-                    ip_header[16][7:0] <= pending_w_data[31:24];
+                REG_IP_DST_ADDR: begin
+                    ip_header[16] <= merged_ip_dst[31:24];
+                    ip_header[17] <= merged_ip_dst[23:16];
+                    ip_header[18] <= merged_ip_dst[15:8];
+                    ip_header[19] <= merged_ip_dst[7:0];
                 end
-                32'h0000_001C: begin
-                    // Source Port
-                    udp_header[1][7:0] <= pending_w_data[7:0];
-                    udp_header[0][7:0] <= pending_w_data[15:8];
+                REG_IP_SRC_PORT: begin
+                    udp_header[0] <= merged_udp_src_port[15:8];
+                    udp_header[1] <= merged_udp_src_port[7:0];
                 end
-                32'h0000_0020: begin
-                    // Destination Port
-                    udp_header[3][7:0] <= pending_w_data[7:0];
-                    udp_header[2][7:0] <= pending_w_data[15:8];
+                REG_IP_DST_PORT: begin
+                    udp_header[2] <= merged_udp_dst_port[15:8];
+                    udp_header[3] <= merged_udp_dst_port[7:0];
                 end
-                32'h0000_0024: begin
-                    sample_idx_offset[31:0] <= pending_w_data[31:0];
+                REG_SAMPLE_IDX_OFFSET_LSB: begin
+                    sample_idx_offset[31:0] <= merged_sample_idx_lsb;
                 end
-                32'h0000_0028: begin
-                    sample_idx_offset[63:32] <= pending_w_data[31:0];
+                REG_SAMPLE_IDX_OFFSET_MSB: begin
+                    sample_idx_offset[63:32] <= merged_sample_idx_msb;
                 end
-                32'h0000_0030: begin
-                    sample_rate_numerator[31:0] <= pending_w_data[31:0];
+                REG_SAMPLE_RATE_NUM_LSB: begin
+                    sample_rate_numerator[31:0] <= merged_sample_rate_num_lsb;
                 end
-                32'h0000_0034: begin
-                    sample_rate_numerator[63:32] <= pending_w_data[31:0];
+                REG_SAMPLE_RATE_NUM_MSB: begin
+                    sample_rate_numerator[63:32] <= merged_sample_rate_num_msb;
                 end
-                32'h0000_0038: begin
-                    sample_rate_denominator[31:0] <= pending_w_data[31:0];
+                REG_SAMPLE_RATE_DEN_LSB: begin
+                    sample_rate_denominator[31:0] <= merged_sample_rate_den_lsb;
                 end
-                32'h0000_003C: begin
-                    sample_rate_denominator[63:32] <= pending_w_data[31:0];
+                REG_SAMPLE_RATE_DEN_MSB: begin
+                    sample_rate_denominator[63:32] <= merged_sample_rate_den_msb;
                 end
                 default: begin
-                    // Do nothing
                 end
             endcase
         end
 
-        // Set user reset after pps_detect is triggered
         if (pps_detect_s00 && enable_next_pps_s00) begin
             user_reset_s00 <= 1'b0;
-            enable_next_pps_s00 = 1'b0;
+            enable_next_pps_s00 <= 1'b0;
         end
     end
 

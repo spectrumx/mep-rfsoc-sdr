@@ -1,7 +1,26 @@
 #!/usr/bin/env bash
 # Run from this directory: boards/ip/adc_to_udp_stream_1.0/hdl/
-# Requires Vivado tools on PATH (e.g. source settings64.sh).
 set -euo pipefail
+
+VIVADO_SETTINGS="/opt/Xilinx/Vivado/2024.1/settings64.sh"
+if [[ ! -f "${VIVADO_SETTINGS}" ]]; then
+  echo "error: Vivado settings not found at ${VIVADO_SETTINGS}" >&2
+  exit 1
+fi
+source "${VIVADO_SETTINGS}"
+
+if ! command -v xvlog >/dev/null 2>&1; then
+  echo "error: xvlog not found after sourcing Vivado settings" >&2
+  exit 1
+fi
+if ! command -v xelab >/dev/null 2>&1; then
+  echo "error: xelab not found after sourcing Vivado settings" >&2
+  exit 1
+fi
+if ! command -v xsim >/dev/null 2>&1; then
+  echo "error: xsim not found after sourcing Vivado settings" >&2
+  exit 1
+fi
 
 usage() {
   cat <<'EOF'
@@ -35,11 +54,6 @@ for a in "$@"; do
       ;;
   esac
 done
-
-if ! command -v xvlog >/dev/null 2>&1; then
-  echo "error: xvlog not found in PATH. Source Vivado settings64.sh first." >&2
-  exit 1
-fi
 
 if [[ -n "${XILINX_VIVADO:-}" ]]; then
   VIVADO_ROOT="${XILINX_VIVADO}"
