@@ -180,10 +180,86 @@ module adc_to_udp_stream_axi_tb;
         // Wait at least 10 S00 clock cycles before any AXI task
         repeat(10) @(posedge s00_axi_aclk);
 
-        // Short idle smoke period
-        #50;
+        // Step 7: Verify register map and reset defaults
+        expect_read(REG_CTRL, 32'h0000_0001, "REG_CTRL reset default");
+        expect_read(REG_FREQUENCY_IDX, 32'h0000_0000, "REG_FREQUENCY_IDX reset default");
+        expect_read(REG_ETH_DST_MAC_LSB, 32'hFFFF_FFFF, "REG_ETH_DST_MAC_LSB reset default");
+        expect_read(REG_ETH_DST_MAC_MSB, 32'h0000_FFFF, "REG_ETH_DST_MAC_MSB reset default");
+        expect_read(REG_SAMPLE_RATE_NUM_LSB, 32'h493E_0000, "REG_SAMPLE_RATE_NUM_LSB reset default");
+        expect_read(REG_SAMPLE_RATE_NUM_MSB, 32'h0000_0000, "REG_SAMPLE_RATE_NUM_MSB reset default");
+        expect_read(REG_SAMPLE_RATE_DEN_LSB, 32'h0000_0010, "REG_SAMPLE_RATE_DEN_LSB reset default");
+        expect_read(REG_SAMPLE_RATE_DEN_MSB, 32'h0000_0000, "REG_SAMPLE_RATE_DEN_MSB reset default");
 
-        $display("Step 6 smoke test completed.");
+        // Invalid offset reads back zero
+        expect_read(7'h01, 32'h0000_0000, "Invalid offset 0x01 reads zero");
+
+        // Invalid write no-mutation: write to offset 0x01, verify REG_CTRL, FREQUENCY_IDX, and 0x01 unchanged
+        axi_write_same_cycle(7'h01, 32'hFFFF_FFFE, 4'hF);
+        expect_read(REG_CTRL, 32'h0000_0001, "REG_CTRL after invalid write");
+        expect_read(REG_FREQUENCY_IDX, 32'h0000_0000, "REG_FREQUENCY_IDX after invalid write");
+        expect_read(7'h01, 32'h0000_0000, "Invalid offset 0x01 after invalid write");
+
+        $display("Step 7 register default checks completed.");
+
+        // Step 8: Basic read/write behavior
+
+        // C8.2: Full-word writable registers
+        axi_write_same_cycle(REG_CTRL, 32'h0000_0000, 4'hF);
+        expect_read(REG_CTRL, 32'h0000_0000, "REG_CTRL write 0");
+
+        axi_write_same_cycle(REG_CTRL, 32'h0000_0001, 4'hF);
+        expect_read(REG_CTRL, 32'h0000_0001, "REG_CTRL write 1");
+
+        axi_write_same_cycle(REG_FREQUENCY_IDX, 32'h1357_9BDF, 4'hF);
+        expect_read(REG_FREQUENCY_IDX, 32'h1357_9BDF, "REG_FREQUENCY_IDX write");
+
+        axi_write_same_cycle(REG_IP_SRC_ADDR, 32'hC0A8_0464, 4'hF);
+        expect_read(REG_IP_SRC_ADDR, 32'hC0A8_0464, "REG_IP_SRC_ADDR write");
+
+        axi_write_same_cycle(REG_IP_DST_ADDR, 32'hC0A8_0465, 4'hF);
+        expect_read(REG_IP_DST_ADDR, 32'hC0A8_0465, "REG_IP_DST_ADDR write");
+
+        axi_write_same_cycle(REG_SAMPLE_IDX_OFFSET_LSB, 32'h89AB_CDEF, 4'hF);
+        expect_read(REG_SAMPLE_IDX_OFFSET_LSB, 32'h89AB_CDEF, "REG_SAMPLE_IDX_OFFSET_LSB write");
+
+        axi_write_same_cycle(REG_SAMPLE_IDX_OFFSET_MSB, 32'h0123_4567, 4'hF);
+        expect_read(REG_SAMPLE_IDX_OFFSET_MSB, 32'h0123_4567, "REG_SAMPLE_IDX_OFFSET_MSB write");
+
+        axi_write_same_cycle(REG_SAMPLE_RATE_NUM_LSB, 32'h5566_7788, 4'hF);
+        expect_read(REG_SAMPLE_RATE_NUM_LSB, 32'h5566_7788, "REG_SAMPLE_RATE_NUM_LSB write");
+
+        axi_write_same_cycle(REG_SAMPLE_RATE_NUM_MSB, 32'h1122_3344, 4'hF);
+        expect_read(REG_SAMPLE_RATE_NUM_MSB, 32'h1122_3344, "REG_SAMPLE_RATE_NUM_MSB write");
+
+        axi_write_same_cycle(REG_SAMPLE_RATE_DEN_LSB, 32'hDDEE_FF00, 4'hF);
+        expect_read(REG_SAMPLE_RATE_DEN_LSB, 32'hDDEE_FF00, "REG_SAMPLE_RATE_DEN_LSB write");
+
+        axi_write_same_cycle(REG_SAMPLE_RATE_DEN_MSB, 32'h99AA_BBCC, 4'hF);
+        expect_read(REG_SAMPLE_RATE_DEN_MSB, 32'h99AA_BBCC, "REG_SAMPLE_RATE_DEN_MSB write");
+
+        // C8.3: UDP port checks (high 16 bits ignored)
+        axi_write_same_cycle(REG_IP_SRC_PORT, 32'hABCD_1234, 4'hF);
+        expect_read(REG_IP_SRC_PORT, 32'h0000_1234, "REG_IP_SRC_PORT write");
+
+        axi_write_same_cycle(REG_IP_DST_PORT, 32'hDCBA_BEEF, 4'hF);
+        expect_read(REG_IP_DST_PORT, 32'h0000_BEEF, "REG_IP_DST_PORT write");
+
+        // C8.4: Destination MAC staging
+        axi_write_same_cycle(REG_ETH_DST_MAC_LSB, 32'hA1B2_C3D4, 4'hF);
+        expect_read(REG_ETH_DST_MAC_LSB, 32'hFFFF_FFFF, "REG_ETH_DST_MAC_LSB staged not committed");
+
+        axi_write_same_cycle(REG_ETH_DST_MAC_MSB, 32'h0000_1122, 4'hF);
+        expect_read(REG_ETH_DST_MAC_MSB, 32'h0000_1122, "REG_ETH_DST_MAC_MSB after commit");
+        expect_read(REG_ETH_DST_MAC_LSB, 32'hA1B2_C3D4, "REG_ETH_DST_MAC_LSB after commit");
+
+        // C8.5: Read-only write-ignore
+        axi_write_same_cycle(REG_RECEIVED_COUNTER, 32'hCAFE_BABE, 4'hF);
+        expect_read(REG_RECEIVED_COUNTER, 32'h0000_0000, "REG_RECEIVED_COUNTER write ignored");
+
+        axi_write_same_cycle(REG_PPS_COUNTER, 32'h0123_4567, 4'hF);
+        expect_read(REG_PPS_COUNTER, 32'h0000_0000, "REG_PPS_COUNTER write ignored");
+
+        $display("Step 8 basic read/write checks completed.");
 
         // Final pass/fail
         if (total_failures == 0) begin
@@ -495,6 +571,22 @@ module adc_to_udp_stream_axi_tb;
             while (s00_axi_rvalid && timeout > 0) begin
                 @(posedge s00_axi_aclk);
                 timeout = timeout - 1;
+            end
+        end
+    endtask
+
+    // expect_read: call axi_read, compare result, report PASS/FAIL
+    task automatic expect_read;
+        input [C_S00_AXI_ADDR_WIDTH-1:0] addr;
+        input [C_S00_AXI_DATA_WIDTH-1:0] expected;
+        input string label;
+        begin
+            reg [C_S00_AXI_DATA_WIDTH-1:0] actual;
+            axi_read(addr, actual);
+            if (actual !== expected) begin
+                fail_test($sformatf("%s: offset 0x%02h expected 0x%08h actual 0x%08h", label, addr, expected, actual));
+            end else begin
+                $display("PASS: %s: 0x%08h", label, actual);
             end
         end
     endtask
