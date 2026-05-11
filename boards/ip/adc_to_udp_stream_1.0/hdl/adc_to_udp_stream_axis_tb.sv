@@ -208,7 +208,7 @@ module adc_to_udp_stream_axis_tb;
         #100ns;
         drive_sample_count = 0;
         accepted_sample_count = 0;
-        drive_s01_phase5_bubbles(NUM_INPUT_BEATS);
+        drive_s01_deterministic_bubbles(NUM_INPUT_BEATS);
         input_done = 1;
     end
 
@@ -343,7 +343,7 @@ module adc_to_udp_stream_axis_tb;
         end
     endtask
 
-    task automatic drive_s01_phase5_bubbles;
+    task automatic drive_s01_deterministic_bubbles;
         input integer beats;
         integer sent;
         begin

@@ -180,7 +180,7 @@ module adc_to_udp_stream_axi_tb;
         // Wait at least 10 S00 clock cycles before any AXI task
         repeat(10) @(posedge s00_axi_aclk);
 
-        // Step 7: Verify register map and reset defaults
+        // Register map and reset defaults
         expect_read(REG_CTRL, 32'h0000_0001, "REG_CTRL reset default");
         expect_read(REG_FREQUENCY_IDX, 32'h0000_0000, "REG_FREQUENCY_IDX reset default");
         expect_read(REG_ETH_DST_MAC_LSB, 32'hFFFF_FFFF, "REG_ETH_DST_MAC_LSB reset default");
@@ -201,9 +201,9 @@ module adc_to_udp_stream_axi_tb;
 
         $display("Step 7 register default checks completed.");
 
-        // Step 8: Basic read/write behavior
+        // Basic read/write behavior
 
-        // C8.2: Full-word writable registers
+        // Full-word writable registers
         axi_write_same_cycle(REG_CTRL, 32'h0000_0000, 4'hF);
         expect_read(REG_CTRL, 32'h0000_0000, "REG_CTRL write 0");
 
@@ -237,14 +237,14 @@ module adc_to_udp_stream_axi_tb;
         axi_write_same_cycle(REG_SAMPLE_RATE_DEN_MSB, 32'h99AA_BBCC, 4'hF);
         expect_read(REG_SAMPLE_RATE_DEN_MSB, 32'h99AA_BBCC, "REG_SAMPLE_RATE_DEN_MSB write");
 
-        // C8.3: UDP port checks (high 16 bits ignored)
+        // UDP port registers keep only the low 16 bits
         axi_write_same_cycle(REG_IP_SRC_PORT, 32'hABCD_1234, 4'hF);
         expect_read(REG_IP_SRC_PORT, 32'h0000_1234, "REG_IP_SRC_PORT write");
 
         axi_write_same_cycle(REG_IP_DST_PORT, 32'hDCBA_BEEF, 4'hF);
         expect_read(REG_IP_DST_PORT, 32'h0000_BEEF, "REG_IP_DST_PORT write");
 
-        // C8.4: Destination MAC staging
+        // Destination MAC LSB is staged until the MSB register commits it
         axi_write_same_cycle(REG_ETH_DST_MAC_LSB, 32'hA1B2_C3D4, 4'hF);
         expect_read(REG_ETH_DST_MAC_LSB, 32'hFFFF_FFFF, "REG_ETH_DST_MAC_LSB staged not committed");
 
@@ -252,7 +252,7 @@ module adc_to_udp_stream_axi_tb;
         expect_read(REG_ETH_DST_MAC_MSB, 32'h0000_1122, "REG_ETH_DST_MAC_MSB after commit");
         expect_read(REG_ETH_DST_MAC_LSB, 32'hA1B2_C3D4, "REG_ETH_DST_MAC_LSB after commit");
 
-        // C8.5: Read-only write-ignore
+        // Read-only registers ignore writes
         axi_write_same_cycle(REG_RECEIVED_COUNTER, 32'hCAFE_BABE, 4'hF);
         expect_read(REG_RECEIVED_COUNTER, 32'h0000_0000, "REG_RECEIVED_COUNTER write ignored");
 
@@ -261,35 +261,35 @@ module adc_to_udp_stream_axi_tb;
 
         $display("Step 8 basic read/write checks completed.");
 
-        // Step 9: Verify Independent AW/W Acceptance
+        // Independent AW/W acceptance
 
-        // C9.3: Same-cycle AW/W acceptance
+        // Same-cycle AW/W acceptance
         axi_write_same_cycle(REG_FREQUENCY_IDX, 32'h0A0B_0C0D, 4'hF);
         expect_read(REG_FREQUENCY_IDX, 32'h0A0B_0C0D, "Step 9 same-cycle AW/W");
 
-        // C9.4: AW-before-W acceptance
+        // AW-before-W acceptance
         axi_write_aw_before_w(REG_FREQUENCY_IDX, 32'h0102_0304, 4'hF);
         expect_read(REG_FREQUENCY_IDX, 32'h0102_0304, "Step 9 AW-before-W");
 
-        // C9.5: W-before-AW acceptance
+        // W-before-AW acceptance
         axi_write_w_before_aw(REG_FREQUENCY_IDX, 32'h0506_0708, 4'hF);
         expect_read(REG_FREQUENCY_IDX, 32'h0506_0708, "Step 9 W-before-AW");
 
-        // C9.6: BREADY-stall write-response (stall for at least 3 cycles)
+        // BREADY-stalled write response
         axi_write_hold_bready(REG_FREQUENCY_IDX, 32'h1111_2222, 4'hF, 3);
         expect_read(REG_FREQUENCY_IDX, 32'h1111_2222, "Step 9 BREADY stall");
 
-        // C9.7: Immediate follow-up write after stalled response completes
+        // Immediate follow-up write after a stalled response
         axi_write_same_cycle(REG_FREQUENCY_IDX, 32'h3333_4444, 4'hF);
         expect_read(REG_FREQUENCY_IDX, 32'h3333_4444, "Step 9 follow-up after BREADY stall");
 
         $display("Step 9 independent AW/W checks completed.");
 
-        // Step 10: Verify WSTRB Byte-Lane Behavior
+        // WSTRB byte-lane behavior
 
-        // C10.1: FREQUENCY_IDX as primary 32-bit WSTRB target
+        // FREQUENCY_IDX as primary 32-bit WSTRB target
 
-        // C10.2: byte-lane writes to FREQUENCY_IDX
+        // Byte-lane writes to FREQUENCY_IDX
         axi_write_wstrb(REG_FREQUENCY_IDX, 32'hAA_BB_CC_DD, 4'hF);
         expect_read(REG_FREQUENCY_IDX, 32'hAA_BB_CC_DD, "Step 10 WSTRB full write to FREQUENCY_IDX");
 
@@ -325,7 +325,7 @@ module adc_to_udp_stream_axi_tb;
         axi_write_wstrb(REG_FREQUENCY_IDX, 32'hB0_B1_B2_B3, 4'h7);
         expect_read(REG_FREQUENCY_IDX, 32'hF0_B1_B2_B3, "Step 10 WSTRB mixed strobe bytes 0,1,2");
 
-        // C10.3: Reduced WSTRB tests for CTRL
+        // CTRL byte-lane writes
         axi_write_wstrb(REG_CTRL, 32'h0000_0000, 4'hF);
         expect_read(REG_CTRL, 32'h0000_0000, "Step 10 CTRL full write to zero");
 
@@ -337,7 +337,7 @@ module adc_to_udp_stream_axi_tb;
         axi_write_wstrb(REG_CTRL, 32'h0000_0000, 4'h1);
         expect_read(REG_CTRL, 32'h0000_0000, "Step 10 CTRL WSTRB byte0 clears bits [1:0]");
 
-        // C10.4: Reduced WSTRB tests for one 16-bit UDP port register
+        // UDP port byte-lane writes
         axi_write_wstrb(REG_IP_DST_PORT, 32'h0000_CDEF, 4'hF);
         expect_read(REG_IP_DST_PORT, 32'h0000_CDEF, "Step 10 IP_DST_PORT full write");
 
@@ -356,9 +356,9 @@ module adc_to_udp_stream_axi_tb;
 
         $display("Step 10 WSTRB byte-lane checks completed.");
 
-        // Step 11: Verify Read Backpressure
+        // Read backpressure
 
-        // C11.1-C11.3: Read stall for FREQUENCY_IDX with RREADY=0
+        // Read stall for FREQUENCY_IDX with RREADY=0
         // First write a known value
         axi_write_same_cycle(REG_FREQUENCY_IDX, 32'h2468_ACE0, 4'hF);
         // Read with RREADY stalled for 4 cycles after RVALID
@@ -373,7 +373,7 @@ module adc_to_udp_stream_axi_tb;
         end
         expect_read(REG_FREQUENCY_IDX, 32'h2468_ACE0, "Step 11 follow-up after stalled read");
 
-        // C11.4: Same stall test for an invalid address returning zero
+        // Read stall for an invalid address returning zero
         begin
             reg [31:0] inv_rdata;
             axi_read_rready_stall(7'h01, inv_rdata, 3);
@@ -387,9 +387,9 @@ module adc_to_udp_stream_axi_tb;
 
         $display("Step 11 read backpressure checks completed.");
 
-        // Step 12: Verify Reset During Partial Transactions
+        // Reset during partial transactions
 
-        // C12.6: Reset after AW before W
+        // Reset after AW before W
         begin
             check_s00_idle("Step 12 pre AW-before-W idle");
             s00_axi_awaddr = REG_FREQUENCY_IDX;
@@ -413,7 +413,7 @@ module adc_to_udp_stream_axi_tb;
             post_reset_write_read("Step 12 post AW-only reset", 32'h1200_0001);
         end
 
-        // C12.7: Reset after W before AW
+        // Reset after W before AW
         begin
             s00_axi_wdata = 32'hDEAD_BEEF;
             s00_axi_wstrb = 4'hF;
@@ -437,7 +437,7 @@ module adc_to_udp_stream_axi_tb;
             post_reset_write_read("Step 12 post W-only reset", 32'h1200_0002);
         end
 
-        // C12.8: Reset while BVALID held
+        // Reset while BVALID is held
         begin
             s00_axi_awaddr = REG_FREQUENCY_IDX;
             s00_axi_awprot = 3'h0;
@@ -477,7 +477,7 @@ module adc_to_udp_stream_axi_tb;
             post_reset_write_read("Step 12 post BVALID reset", 32'h1200_0003);
         end
 
-        // C12.9: Reset while RVALID held
+        // Reset while RVALID is held
         begin
             axi_write_same_cycle(REG_FREQUENCY_IDX, 32'hCAFE_0004, 4'hF);
             s00_axi_araddr = REG_FREQUENCY_IDX;
@@ -515,9 +515,9 @@ module adc_to_udp_stream_axi_tb;
 
         $display("Step 12 reset during partial transaction checks completed.");
 
-        // Step 13: Verify CTRL PPS Side Effect
+        // CTRL PPS side effect
 
-        // C13.2: Write CTRL = 0x3 to set user_reset_s00=1 and enable_next_pps_s00=1
+        // Set user_reset_s00 and enable_next_pps_s00
         axi_write_same_cycle(REG_CTRL, 32'h0000_0003, 4'hF);
         expect_read(REG_CTRL, 32'h0000_0003, "Step 13 CTRL set user_reset and enable_next_pps");
 
@@ -525,7 +525,7 @@ module adc_to_udp_stream_axi_tb;
         clear_s00_master_signals();
         repeat(10) @(posedge s00_axi_aclk);
 
-        // C13.3: Pulse pps_comp, aligned to S01 clock for reliable edge detection.
+        // Pulse pps_comp aligned to S01 clock for reliable edge detection.
         @(posedge s01_axis_aclk);
         #1;
         pps_comp = 1;
@@ -541,7 +541,7 @@ module adc_to_udp_stream_axi_tb;
         @(posedge s00_axi_aclk);
         @(posedge s00_axi_aclk);
 
-        // C13.4: Final readback: CTRL[1:0] must both be cleared (0x0)
+        // CTRL[1:0] must both be cleared after the PPS side effect.
         expect_read(REG_CTRL, 32'h0000_0000, "Step 13 CTRL cleared after PPS side effect");
 
         $display("Step 13 CTRL PPS side effect checks completed.");
@@ -966,7 +966,7 @@ module adc_to_udp_stream_axi_tb;
         end
     endtask
 
-    // C12.2: clear_s00_master_signals
+    // Drive all S00 master signals to idle.
     task clear_s00_master_signals;
         begin
             s00_axi_awvalid = 0;
@@ -983,7 +983,7 @@ module adc_to_udp_stream_axi_tb;
         end
     endtask
 
-    // C12.3: check_s00_idle
+    // Check that all S00 response and ready signals are idle.
     task check_s00_idle;
         input string label;
         begin
@@ -1005,7 +1005,7 @@ module adc_to_udp_stream_axi_tb;
         end
     endtask
 
-    // C12.4: pulse_s00_reset
+    // Pulse S00 reset and verify default register state.
     task pulse_s00_reset;
         input string label;
         begin
@@ -1020,7 +1020,7 @@ module adc_to_udp_stream_axi_tb;
         end
     endtask
 
-    // C12.5: post_reset_write_read
+    // Verify a write/read pair after reset recovery.
     task post_reset_write_read;
         input string label;
         input [C_S00_AXI_DATA_WIDTH-1:0] data;

@@ -349,8 +349,8 @@ module adc_to_udp_stream_v1_0 #
             fifo_0_reset <= 1;
             fifo_1_reset <= 1;
         end else begin
-            // Legacy packet-byte behavior depends on the source advancing when
-            // TVALID is asserted, even if a FIFO reset-busy window prevents storage.
+            // The source-visible sample counter follows TVALID. FIFO write
+            // enables below still block storage during reset-busy windows.
             if (s01_axis_tvalid) begin
                 received_counter_s01 <= received_counter_s01 + 1;
             end
@@ -858,8 +858,8 @@ module adc_to_udp_stream_v1_0 #
         end else if (m00_axis_can_load) begin
             // First transaction
             if (start_udp_header && !in_udp_header) begin
-                // Prefetch tdata one cycle before asserting TVALID, preserving
-                // the existing packet-byte timing.
+                // Prefetch tdata one cycle before asserting TVALID so the
+                // header-to-payload byte alignment stays fixed.
                 udp_packet_axis_valid <= 1'b0;
                 udp_packet_axis_data <= udp_packet[packet_state];
             end else if(in_udp_header) begin
