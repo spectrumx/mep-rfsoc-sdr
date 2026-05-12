@@ -1079,75 +1079,77 @@ module adc_to_udp_stream_v1_0 #
             frequency_idx[31:0] <= 32'd0;
             user_reset_s00 <= 1'b1;
             enable_next_pps_s00 <= 1'b0;
-        end else if (write_commit) begin
-            case (pending_aw_addr[6:0])
-                REG_CTRL: begin
-                    user_reset_s00 <= merged_ctrl[0];
-                    enable_next_pps_s00 <= merged_ctrl[1];
-                end
-                REG_FREQUENCY_IDX: begin
-                    frequency_idx <= merged_freq_idx;
-                end
-                REG_ETH_DST_MAC_LSB: begin
-                    eth_dst_mac_lsb[0] <= merged_eth_dst_mac_lsb[31:24];
-                    eth_dst_mac_lsb[1] <= merged_eth_dst_mac_lsb[23:16];
-                    eth_dst_mac_lsb[2] <= merged_eth_dst_mac_lsb[15:8];
-                    eth_dst_mac_lsb[3] <= merged_eth_dst_mac_lsb[7:0];
-                end
-                REG_ETH_DST_MAC_MSB: begin
-                    eth_dst_mac[0] <= merged_eth_dst_mac_msb[15:8];
-                    eth_dst_mac[1] <= merged_eth_dst_mac_msb[7:0];
-                    eth_dst_mac[2] <= eth_dst_mac_lsb[0];
-                    eth_dst_mac[3] <= eth_dst_mac_lsb[1];
-                    eth_dst_mac[4] <= eth_dst_mac_lsb[2];
-                    eth_dst_mac[5] <= eth_dst_mac_lsb[3];
-                end
-                REG_IP_SRC_ADDR: begin
-                    ip_header[12] <= merged_ip_src[31:24];
-                    ip_header[13] <= merged_ip_src[23:16];
-                    ip_header[14] <= merged_ip_src[15:8];
-                    ip_header[15] <= merged_ip_src[7:0];
-                end
-                REG_IP_DST_ADDR: begin
-                    ip_header[16] <= merged_ip_dst[31:24];
-                    ip_header[17] <= merged_ip_dst[23:16];
-                    ip_header[18] <= merged_ip_dst[15:8];
-                    ip_header[19] <= merged_ip_dst[7:0];
-                end
-                REG_IP_SRC_PORT: begin
-                    udp_header[0] <= merged_udp_src_port[15:8];
-                    udp_header[1] <= merged_udp_src_port[7:0];
-                end
-                REG_IP_DST_PORT: begin
-                    udp_header[2] <= merged_udp_dst_port[15:8];
-                    udp_header[3] <= merged_udp_dst_port[7:0];
-                end
-                REG_SAMPLE_IDX_OFFSET_LSB: begin
-                    sample_idx_offset[31:0] <= merged_sample_idx_lsb;
-                end
-                REG_SAMPLE_IDX_OFFSET_MSB: begin
-                    sample_idx_offset[63:32] <= merged_sample_idx_msb;
-                end
-                REG_SAMPLE_RATE_NUM_LSB: begin
-                    sample_rate_numerator[31:0] <= merged_sample_rate_num_lsb;
-                end
-                REG_SAMPLE_RATE_NUM_MSB: begin
-                    sample_rate_numerator[63:32] <= merged_sample_rate_num_msb;
-                end
-                REG_SAMPLE_RATE_DEN_LSB: begin
-                    sample_rate_denominator[31:0] <= merged_sample_rate_den_lsb;
-                end
-                REG_SAMPLE_RATE_DEN_MSB: begin
-                    sample_rate_denominator[63:32] <= merged_sample_rate_den_msb;
-                end
-                default: begin
-                end
-            endcase
-        end
+        end else begin
+            if (write_commit) begin
+                case (pending_aw_addr[6:0])
+                    REG_CTRL: begin
+                        user_reset_s00 <= merged_ctrl[0];
+                        enable_next_pps_s00 <= merged_ctrl[1];
+                    end
+                    REG_FREQUENCY_IDX: begin
+                        frequency_idx <= merged_freq_idx;
+                    end
+                    REG_ETH_DST_MAC_LSB: begin
+                        eth_dst_mac_lsb[0] <= merged_eth_dst_mac_lsb[31:24];
+                        eth_dst_mac_lsb[1] <= merged_eth_dst_mac_lsb[23:16];
+                        eth_dst_mac_lsb[2] <= merged_eth_dst_mac_lsb[15:8];
+                        eth_dst_mac_lsb[3] <= merged_eth_dst_mac_lsb[7:0];
+                    end
+                    REG_ETH_DST_MAC_MSB: begin
+                        eth_dst_mac[0] <= merged_eth_dst_mac_msb[15:8];
+                        eth_dst_mac[1] <= merged_eth_dst_mac_msb[7:0];
+                        eth_dst_mac[2] <= eth_dst_mac_lsb[0];
+                        eth_dst_mac[3] <= eth_dst_mac_lsb[1];
+                        eth_dst_mac[4] <= eth_dst_mac_lsb[2];
+                        eth_dst_mac[5] <= eth_dst_mac_lsb[3];
+                    end
+                    REG_IP_SRC_ADDR: begin
+                        ip_header[12] <= merged_ip_src[31:24];
+                        ip_header[13] <= merged_ip_src[23:16];
+                        ip_header[14] <= merged_ip_src[15:8];
+                        ip_header[15] <= merged_ip_src[7:0];
+                    end
+                    REG_IP_DST_ADDR: begin
+                        ip_header[16] <= merged_ip_dst[31:24];
+                        ip_header[17] <= merged_ip_dst[23:16];
+                        ip_header[18] <= merged_ip_dst[15:8];
+                        ip_header[19] <= merged_ip_dst[7:0];
+                    end
+                    REG_IP_SRC_PORT: begin
+                        udp_header[0] <= merged_udp_src_port[15:8];
+                        udp_header[1] <= merged_udp_src_port[7:0];
+                    end
+                    REG_IP_DST_PORT: begin
+                        udp_header[2] <= merged_udp_dst_port[15:8];
+                        udp_header[3] <= merged_udp_dst_port[7:0];
+                    end
+                    REG_SAMPLE_IDX_OFFSET_LSB: begin
+                        sample_idx_offset[31:0] <= merged_sample_idx_lsb;
+                    end
+                    REG_SAMPLE_IDX_OFFSET_MSB: begin
+                        sample_idx_offset[63:32] <= merged_sample_idx_msb;
+                    end
+                    REG_SAMPLE_RATE_NUM_LSB: begin
+                        sample_rate_numerator[31:0] <= merged_sample_rate_num_lsb;
+                    end
+                    REG_SAMPLE_RATE_NUM_MSB: begin
+                        sample_rate_numerator[63:32] <= merged_sample_rate_num_msb;
+                    end
+                    REG_SAMPLE_RATE_DEN_LSB: begin
+                        sample_rate_denominator[31:0] <= merged_sample_rate_den_lsb;
+                    end
+                    REG_SAMPLE_RATE_DEN_MSB: begin
+                        sample_rate_denominator[63:32] <= merged_sample_rate_den_msb;
+                    end
+                    default: begin
+                    end
+                endcase
+            end
 
-        if (pps_detect_s00 && enable_next_pps_s00) begin
-            user_reset_s00 <= 1'b0;
-            enable_next_pps_s00 <= 1'b0;
+            if (pps_detect_s00 && enable_next_pps_s00) begin
+                user_reset_s00 <= 1'b0;
+                enable_next_pps_s00 <= 1'b0;
+            end
         end
     end
 
