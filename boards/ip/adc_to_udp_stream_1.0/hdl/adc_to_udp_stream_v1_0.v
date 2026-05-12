@@ -1053,13 +1053,6 @@ module adc_to_udp_stream_v1_0 #
         .signal_clk1(pps_detect_s00)
     );
 
-    wire received_counter_m00;
-    signal_clock_sync received_counter_sync (
-        .clk1_in(m00_axis_aclk),
-        .signal_clk0(received_counter_s01),
-        .signal_clk1(received_counter_m00)
-    );
-
     // Register write side effects. Read-only and unsupported offsets complete
     // with an OKAY write response but leave writable state unchanged.
     always @(posedge s00_axi_aclk or negedge s00_axi_aresetn) begin
