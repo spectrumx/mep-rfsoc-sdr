@@ -477,7 +477,7 @@ module check_udp_packet_tb;
 
 
     initial begin
-        s01_axis_tvalid = 1'b0;
+        s01_axis_tvalid = 1'b1;
         s01_axis_tdata = 64'h0;
 
         // Wait for reset deassertion
@@ -497,7 +497,7 @@ module check_udp_packet_tb;
             s4 = input_sample_count + 3;
 
             s01_axis_tdata = {s4, s3, s2, s1};
-            s01_axis_tvalid = 1'b1;
+            //s01_axis_tvalid = 1'b1;
 
             // Record samples in order (s1 is first, s4 is last)
             if (s01_axis_tready) begin
