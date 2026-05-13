@@ -27,7 +27,7 @@ usage() {
 Usage: ./sim_check_udp_packet_tvalid.bash [--gui] [-h|--help]
 
 Options:
-  --gui       Launch xsim in GUI mode using the check_udp_packet wave configuration
+  --gui       Launch xsim in GUI mode and load check_udp_packet_tvalid_tb_sim.wcfg
   -h, --help  Show this help message
 EOF
 }
@@ -67,16 +67,15 @@ GLBL_V="${VIVADO_ROOT}/data/verilog/src/glbl.v"
 XPM_CDC_SV="${XPM_DIR}/xpm_cdc/hdl/xpm_cdc.sv"
 XPM_MEMORY_SV="${XPM_DIR}/xpm_memory/hdl/xpm_memory.sv"
 XPM_FIFO_SV="${XPM_DIR}/xpm_fifo/hdl/xpm_fifo.sv"
-BASE_WCFG_FILE="./check_udp_packet_tb_sim.wcfg"
-GENERATED_WCFG_FILE="./check_udp_packet_tvalid_tb_sim.generated.wcfg"
+WCFG_FILE="./check_udp_packet_tvalid_tb_sim.wcfg"
 
 if [[ ! -f "${GLBL_V}" || ! -f "${XPM_CDC_SV}" || ! -f "${XPM_MEMORY_SV}" || ! -f "${XPM_FIFO_SV}" ]]; then
   echo "error: could not find Vivado simulation sources under ${VIVADO_ROOT}/data" >&2
   exit 1
 fi
 
-if [[ "${USE_GUI}" -eq 1 && ! -f "${BASE_WCFG_FILE}" ]]; then
-  echo "error: GUI wave configuration not found: ${BASE_WCFG_FILE}" >&2
+if [[ "${USE_GUI}" -eq 1 && ! -f "${WCFG_FILE}" ]]; then
+  echo "error: GUI wave configuration not found: ${WCFG_FILE}" >&2
   exit 1
 fi
 
@@ -99,12 +98,7 @@ xvlog -sv \
 xelab -debug typical check_udp_packet_tvalid_tb glbl -s sim_check_udp_packet_tvalid
 
 if [[ "${USE_GUI}" -eq 1 ]]; then
-  sed \
-    -e 's/sim_check_udp_packet\.wdb/sim_check_udp_packet_tvalid.wdb/g' \
-    -e 's/top_module name="check_udp_packet_tb"/top_module name="check_udp_packet_tvalid_tb"/g' \
-    -e 's#/check_udp_packet_tb#/check_udp_packet_tvalid_tb#g' \
-    "${BASE_WCFG_FILE}" > "${GENERATED_WCFG_FILE}"
-  xsim sim_check_udp_packet_tvalid -gui -view "${GENERATED_WCFG_FILE}"
+  xsim sim_check_udp_packet_tvalid -gui -view "${WCFG_FILE}"
 else
   xsim sim_check_udp_packet_tvalid -runall
 fi
