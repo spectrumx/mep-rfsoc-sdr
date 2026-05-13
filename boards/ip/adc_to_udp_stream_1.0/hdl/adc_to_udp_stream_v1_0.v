@@ -349,9 +349,7 @@ module adc_to_udp_stream_v1_0 #
             fifo_0_reset <= 1;
             fifo_1_reset <= 1;
         end else begin
-            // The source-visible sample counter follows TVALID. FIFO write
-            // enables below still block storage during reset-busy windows.
-            if (s01_axis_tvalid) begin
+            if (s01_axis_tvalid && s01_axis_tready) begin
                 received_counter_s01 <= received_counter_s01 + 1;
             end
 
