@@ -352,6 +352,13 @@ def configure_tx(args, data):
         configure_tx_function_generator(channel, tx_offset_mhz, tx_amplitude_q15, data)
 
 
+def on_connect(client, userdata, flags, rc):
+    if rc == 0:
+        logging.info("Connected to MQTT broker")
+        client.subscribe(MQTT_CMD_TOPIC)
+    else:
+        logging.error(f"Failed to connect to MQTT broker, return code {rc}")
+
 def on_message(client, userdata, msg):
     global data
     try:
@@ -568,6 +575,7 @@ def run(args):
     # Setup MQTT client
     mqtt_client = mqtt.Client(client_id=service_name)
     mqtt_client.on_message = on_message
+    mqtt_client.on_connect = on_connect
     mqtt_client.will_set(
         service_name + "/status",
         payload=json.dumps({"state": "offline"}),
@@ -575,7 +583,6 @@ def run(args):
         retain=True,
     )
     mqtt_client.connect(MQTT_BROKER, MQTT_PORT, 60)
-    mqtt_client.subscribe(MQTT_CMD_TOPIC)
     mqtt_client.loop_start()
     data.mqtt_client = mqtt_client
 
