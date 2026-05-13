@@ -4,6 +4,22 @@ from pynq import Overlay
 
 
 class SDROverlay(Overlay):
+    SUPPORTED_ADC_DECIMATION_FACTORS = (
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        8,
+        10,
+        12,
+        16,
+        20,
+        24,
+        40,
+    )
+
     def __init__(self, bitfile_name, **kwargs):
         super().__init__(bitfile_name, **kwargs)
         # SDR Overlay initialization
@@ -38,6 +54,15 @@ class SDROverlay(Overlay):
         adc_tile.blocks[block].UpdateEvent(xrfdc.EVENT_MIXER)
         adc_tile.SetupFIFO(True)
 
+    def set_adc_decimation(self, decimation, tile, block):
+        """Set the ADC decimation factor for one RFDC ADC block.
+
+        This does not change RFDC fabric clocks or downstream metadata.
+        Callers must use a factor compatible with the loaded bitstream.
+        """
+        decimation_value = self._adc_decimation_factor_value(decimation)
+        self.rfdc.adc_tiles[tile].blocks[block].DecimationFactor = decimation_value
+
     def set_dac_nco(self, f_c_mhz, f_s_mhz, tile, block):
         """Set the DAC NCO frequency"""
         f_c_mhz = float(f_c_mhz)
@@ -66,3 +91,19 @@ class SDROverlay(Overlay):
         if half_sample_rate <= 0:
             raise ValueError("Sample rate must be greater than 0 MHz")
         return 2 if abs(f_c_mhz) > half_sample_rate else 1
+
+    @classmethod
+    def _adc_decimation_factor_value(cls, factor):
+        try:
+            factor = int(factor)
+        except (TypeError, ValueError):
+            raise ValueError(
+                f"RFDC decimation factor must be one of {cls.SUPPORTED_ADC_DECIMATION_FACTORS}"
+            )
+
+        if factor not in cls.SUPPORTED_ADC_DECIMATION_FACTORS:
+            raise ValueError(
+                f"RFDC decimation factor must be one of {cls.SUPPORTED_ADC_DECIMATION_FACTORS}"
+            )
+
+        return getattr(xrfdc, f"INTERP_DECIM_{factor}X", factor)

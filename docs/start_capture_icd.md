@@ -56,6 +56,7 @@ The `rfsoc/status` topic carries a retained JSON payload:
 | `f_c_hz` | number | Current center frequency in Hz (from metadata). |
 | `f_if_hz` | number | Current IF/NCO frequency in Hz. |
 | `f_s` | number | Current output sample rate in Hz. |
+| `adc_decimation` | integer | RFDC ADC decimation factor applied at startup. |
 | `pps_count` | integer | Monotonically increasing PPS counter (max across all channels). |
 | `channels` | string[] | List of currently active channel identifiers (e.g., `["A", "B"]`). |
 | `tx_channels` | string[] | Currently active TX channel identifiers (e.g., `["A"]`). |
@@ -74,5 +75,6 @@ On unexpected disconnect, the MQTT Will publishes to `rfsoc/status`:
 
 - The `capture_next_pps` command waits for the fractional second to drop below 0.5 before arming, then sleeps an additional 100 ms. The sample index offset is computed from `epoch_s + 1`.
 - The `set freq_IF` command rounds the requested frequency to 3 decimal places (kHz precision) before applying.
+- ADC decimation is configured at startup with `--adc-decimation`; there is no MQTT command to change it at runtime. The startup option updates RFDC ADC decimation and metadata, but does not reconfigure RFDC fabric clocks or PL clocks.
 - Unknown `set` parameters log a warning and are ignored.
 - Commands missing `task_name` log a warning and are ignored.

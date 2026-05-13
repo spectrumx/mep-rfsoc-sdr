@@ -34,6 +34,7 @@ LOCK_FILE = os.path.join(os.sep, "var", "lock", service_name + ".lock")
 ADC_SAMPLE_FREQUENCY = 1024  # MSps
 DAC_SAMPLE_FREQUENCY = 1024  # MSps
 ADC_DECIMATION = 16
+ADC_TILE_BLOCKS = [(0, 0), (0, 1), (2, 0), (2, 1)]
 ADC_IF = 1090  # MHz
 ALL_CHANNELS = ["A", "B", "C", "D"]
 TX_CHANNEL_CHOICES = ("A", "B", "A,B", "None")
@@ -89,6 +90,7 @@ class CaptureData:
             channel: TX_DEFAULT_OFFSET_FREQ_MHZ for channel in TX_CHANNEL_CONFIG
         }
         self.tx_amplitude_bins = TX_DEFAULT_AMPLITUDE_BINS
+        self.adc_decimation = ADC_DECIMATION
 
 
 data = CaptureData()
@@ -104,6 +106,7 @@ def send_status(data):
         "f_c_hz": data.f_c_hz,
         "f_if_hz": data.f_if_hz,
         "f_s": data.f_s,
+        "adc_decimation": data.adc_decimation,
         "pps_count": getattr(data, "pps_count", 0),
         "channels": data.channels,
         "tx_channels": data.tx_channels,
@@ -475,24 +478,39 @@ def update_adc_nco(freq_mhz, data):
     data.f_if_hz = freq_hz
 
     try:
-        for tile, block in [(0, 0), (0, 1), (2, 0), (2, 1)]:
+        for tile, block in ADC_TILE_BLOCKS:
             data.ol.set_adc_nco(-freq_mhz, ADC_SAMPLE_FREQUENCY, tile, block)
 
-        set_sample_rate((ADC_SAMPLE_FREQUENCY * 1e6) / ADC_DECIMATION, data)
+        set_adc_decimation(data.adc_decimation, data)
+        set_sample_rate((ADC_SAMPLE_FREQUENCY * 1e6) / data.adc_decimation, data)
         set_freq_metadata(freq_hz, data)
         logging.info(f"ADC mixer and metadata updated to {freq_mhz:.2f} MHz")
     except Exception as e:
         logging.error(f"Failed to update full ADC mixer configuration: {e}")
 
 
+def set_adc_decimation(decimation, data):
+    data.adc_decimation = int(decimation)
+    for tile, block in ADC_TILE_BLOCKS:
+        data.ol.set_adc_decimation(data.adc_decimation, tile, block)
+    logging.info("ADC decimation set to %dx on all RFDC ADC channels", data.adc_decimation)
+
+
 def set_sample_rate(sample_rate, data):
     data.f_s = sample_rate
-    sample_rate_raw = sample_rate * ADC_DECIMATION
-    logging.info(f"Setting sample rate metadata to: {sample_rate_raw}")
+    sample_rate_num = int(round(sample_rate * data.adc_decimation))
+    sample_rate_den = int(data.adc_decimation)
+    logging.info(
+        "Setting sample rate metadata to: %d/%d Hz",
+        sample_rate_num,
+        sample_rate_den,
+    )
     for ch in data.channels:
-        getattr(
-            data.ol, f"adc_to_udp_stream_{ch}"
-        ).register_map.SAMPLE_RATE_NUMERATOR_LSB = sample_rate_raw
+        regs = getattr(data.ol, f"adc_to_udp_stream_{ch}").register_map
+        regs.SAMPLE_RATE_NUMERATOR_LSB = sample_rate_num & 0xFFFFFFFF
+        regs.SAMPLE_RATE_NUMERATOR_MSB = sample_rate_num >> 32
+        regs.SAMPLE_RATE_DENOMINATOR_LSB = sample_rate_den & 0xFFFFFFFF
+        regs.SAMPLE_RATE_DENOMINATOR_MSB = sample_rate_den >> 32
 
 
 def set_freq_metadata(f_c_hz, data):
@@ -564,6 +582,7 @@ def run(args):
     )
     data.f_if_hz = args.freq * 1e6
     data.pps_count = 0
+    data.adc_decimation = args.adc_decimation
 
     # Setup MQTT client
     mqtt_client = mqtt.Client(client_id=service_name)
@@ -692,6 +711,13 @@ def main():
         "--internal_clock",
         action="store_true",
         help="Use internal clock instead of external ref",
+    )
+    parser.add_argument(
+        "--adc-decimation",
+        type=int,
+        default=ADC_DECIMATION,
+        choices=SDROverlay.SUPPORTED_ADC_DECIMATION_FACTORS,
+        help="RFDC ADC decimation factor applied to all ADC channels at startup",
     )
     parser.add_argument(
         "--tx-channel",

@@ -49,11 +49,14 @@ Command line options:
 | `-c`, `--channels` | `A` | ADC capture channels to stream. Valid channels are `A`, `B`, `C`, and `D`. |
 | `-r`, `--reset` | disabled | Load and configure the overlay, but leave ADC capture held in reset. |
 | `-i`, `--internal_clock` | external ref | Use the internal clock configuration instead of an external reference. |
+| `--adc-decimation` | `16` | RFDC ADC decimation factor applied to all ADC channels at startup. |
 | `--tx-channel` | `A` | DAC output channel for the TX tone: `A`, `B`, `A,B`, or `None`. |
 | `--tx-center-freq` | unset | RFDC DAC mixer/NCO center frequency in MHz for selected TX channel(s). |
 | `--tx-offset-freq` | unset | Function-generator baseband offset frequency in MHz. If TX is otherwise requested, defaults to `0`. Must be less than `32 MHz` in magnitude. |
 | `--tx-amplitude` | `8191` | TX waveform peak amplitude in signed 14-bit DAC bins, `0..8191`. |
 | `-l`, `--log-level` | `INFO` | Python logging level. |
+
+Changing `--adc-decimation` updates RFDC ADC decimation and packet/status sample-rate metadata, but does not reconfigure RFDC fabric clocks or PL clocks.
 
 ## Vivado build guide
 
