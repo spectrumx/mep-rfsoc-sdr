@@ -553,7 +553,7 @@ module adc_to_udp_stream_v1_0 #
         sample_rate_numerator[63:0] = 64'd1228800000; // Default 1.2288Gsps
         sample_rate_denominator[63:0] = 64'd16; // Default 16x divisor
         frequency_idx[31:0] = 32'd0;
-        num_subchannels[31:0] = 32'd0;
+        num_subchannels[31:0] = 32'd1;
         pkt_samples[31:0] = PAYLOAD_WORDS / 2; 
         bits_per_int[15:0] = 16'd16;
         is_complex[7:0] = 8'd1;
