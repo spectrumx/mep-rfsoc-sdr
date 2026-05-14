@@ -356,6 +356,13 @@ def on_connect(client, userdata, flags, rc):
     if rc == 0:
         logging.info("Connected to MQTT broker")
         client.subscribe(MQTT_CMD_TOPIC)
+
+        # Republish retained status on every (re)connect so the broker always
+        # has an up-to-date retained message — survives broker restarts/recreates.
+        try:
+            send_status(data)
+        except Exception as e:
+            logging.error(f"Failed to publish status on connect: {e}")
     else:
         logging.error(f"Failed to connect to MQTT broker, return code {rc}")
 
