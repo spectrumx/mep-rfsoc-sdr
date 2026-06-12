@@ -1,0 +1,13 @@
+[Unit]
+Description=MEP RFSoC SDR service and MQTT listener
+
+[Service]
+Type=exec
+Environment="BOARD=RFSoC4x2"
+Environment="XILINX_XRT=/usr"
+ExecStart=/usr/local/share/pynq-venv/bin/start_capture_rx -r
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
