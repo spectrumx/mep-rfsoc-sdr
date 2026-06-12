@@ -366,6 +366,7 @@ def on_connect(client, userdata, flags, rc):
     else:
         logging.error(f"Failed to connect to MQTT broker, return code {rc}")
 
+
 def on_message(client, userdata, msg):
     global data
     try:
@@ -624,16 +625,19 @@ def run(args):
         else float(args.tx_offset_freq)
     )
     data.tx_amplitude_bins = (
-        TX_DEFAULT_AMPLITUDE_BINS if args.tx_amplitude is None else int(args.tx_amplitude)
+        TX_DEFAULT_AMPLITUDE_BINS
+        if args.tx_amplitude is None
+        else int(args.tx_amplitude)
     )
 
-    # Set active channels
+    # Initialize all channels to make sure they're ready for later use
     data.channels = ALL_CHANNELS
     set_channel_ctrl(Ctrl.RESET, data)
-    data.channels = args.channels
-
     # Apply initial ADC config
     update_adc_nco(args.freq, data)
+
+    # Set active channels
+    data.channels = args.channels
 
     # Start Capture
     if not args.reset:
