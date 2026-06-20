@@ -12,7 +12,6 @@ import time
 from enum import Enum
 
 import paho.mqtt.client as mqtt
-import xrfdc
 
 if __package__ in (None, ""):
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -37,7 +36,6 @@ ADC_DECIMATION = 16
 ADC_IF = 1090  # MHz
 ALL_CHANNELS = ["A", "B", "C", "D"]
 TX_CHANNEL_CHOICES = ("A", "B", "A,B", "None")
-TX_DEFAULT_CHANNELS = ("A",)
 TX_WAVEFORM_SINE_COS = 1
 TX_BASEBAND_NYQUIST_MHZ = 32.0
 TX_MAX_AMPLITUDE_BINS = 8191
@@ -82,13 +80,14 @@ class CaptureData:
         self.channels = []
         self.mqtt_client = None
         self.ol = None
-        self.tx_channels = TX_DEFAULT_CHANNELS
+        self.tx_channels = ()               # safe default: not transmitting until configured
         self.tx_center_freq = None
         self.tx_offset_freq = TX_DEFAULT_OFFSET_FREQ_MHZ
         self.tx_offset_freq_by_channel = {
             channel: TX_DEFAULT_OFFSET_FREQ_MHZ for channel in TX_CHANNEL_CONFIG
         }
-        self.tx_amplitude_bins = TX_DEFAULT_AMPLITUDE_BINS
+        self.tx_amplitude_bins = 0          # safe default: zero amplitude until configured
+        self.pps_publish_interval_s = 0   # 0 = disabled; set via MQTT to enable
 
 
 data = CaptureData()
@@ -167,23 +166,24 @@ def resolve_tx_offset_mhz(args):
 
 def resolve_tx_channels(args):
     if args.tx_channel is None:
-        return TX_DEFAULT_CHANNELS
+        return ()
     if args.tx_channel == "None":
         return ()
     return tuple(args.tx_channel.split(","))
 
 
 def resolve_tx_amplitude_q15(args):
-    amplitude_bins = (
-        TX_DEFAULT_AMPLITUDE_BINS
-        if args.tx_amplitude is None
-        else int(args.tx_amplitude)
-    )
+    if args.tx_amplitude is None:
+        raise ValueError(
+            "--tx-amplitude is required when TX is requested. "
+            f"Specify a value in DAC bins 0..{TX_MAX_AMPLITUDE_BINS} "
+            "(0 = silent, 8191 = full scale)."
+        )
+    amplitude_bins = int(args.tx_amplitude)
     if amplitude_bins < 0 or amplitude_bins > TX_MAX_AMPLITUDE_BINS:
         raise ValueError(
             f"--tx-amplitude must be in DAC bins 0..{TX_MAX_AMPLITUDE_BINS}"
         )
-
     return tx_amplitude_bins_to_q15(amplitude_bins)
 
 
@@ -203,38 +203,12 @@ def encode_signed_frequency_hz(frequency_hz):
     return frequency_hz & ((1 << TX_FREQUENCY_REG_BITS) - 1)
 
 
-def tx_nyquist_zone(f_c_mhz, f_s_mhz):
-    half_sample_rate = f_s_mhz / 2.0
-    if half_sample_rate <= 0:
-        raise ValueError("Sample rate must be greater than 0 MHz")
-    return 2 if abs(f_c_mhz) > half_sample_rate else 1
-
-
 def set_tx_dac_nco(overlay, f_c_mhz, f_s_mhz, tile, block):
-    overlay_method = getattr(type(overlay), "set_dac_nco", None)
-    if overlay_method is not None:
-        overlay.set_dac_nco(f_c_mhz, f_s_mhz, tile, block)
-        return
-
-    f_c_mhz = float(f_c_mhz)
-    f_s_mhz = float(f_s_mhz)
-    pll_freq = 491.52  # MHz — assumed static LMX freq
-
-    mixer = {
-        "CoarseMixFreq": xrfdc.COARSE_MIX_BYPASS,
-        "EventSource": xrfdc.EVNT_SRC_TILE,
-        "FineMixerScale": xrfdc.MIXER_SCALE_1P0,
-        "Freq": f_c_mhz,
-        "MixerMode": xrfdc.MIXER_MODE_C2R,
-        "MixerType": xrfdc.MIXER_TYPE_FINE,
-        "PhaseOffset": 0.0,
-    }
-
-    dac_tile = overlay.rfdc.dac_tiles[tile]
-    dac_tile.DynamicPLLConfig(1, pll_freq, f_s_mhz)
-    dac_tile.blocks[block].NyquistZone = tx_nyquist_zone(f_c_mhz, f_s_mhz)
-    dac_tile.blocks[block].MixerSettings = mixer
-    dac_tile.blocks[block].UpdateEvent(xrfdc.EVENT_MIXER)
+    overlay.set_dac_nco(f_c_mhz, f_s_mhz, tile, block)
+    logging.info(
+        "TX DAC NCO set: tile=%d block=%d f_c=%.6f MHz f_s=%.6f MHz",
+        tile, block, f_c_mhz, f_s_mhz,
+    )
 
 
 def get_tx_function_generator(channel, data, required):
@@ -324,14 +298,24 @@ def configure_tx_function_generator(channel, tx_offset_mhz, tx_amplitude_q15, da
 def configure_tx(args, data):
     tx_channels = resolve_tx_channels(args)
     tx_offset_mhz = resolve_tx_offset_mhz(args)
-    tx_amplitude_q15 = resolve_tx_amplitude_q15(args)
 
+    # Disable all channels not in tx_channels
     for channel in TX_CHANNEL_CONFIG:
         if channel not in tx_channels:
             configure_tx_function_generator(channel, None, None, data)
 
+    # Update data state to reflect actual hardware configuration
+    data.tx_channels = tx_channels
+    data.tx_center_freq = args.tx_center_freq
+    data.tx_offset_freq = TX_DEFAULT_OFFSET_FREQ_MHZ if tx_offset_mhz is None else float(args.tx_offset_freq)
+    data.tx_amplitude_bins = 0 if tx_offset_mhz is None else (
+        TX_DEFAULT_AMPLITUDE_BINS if args.tx_amplitude is None else int(args.tx_amplitude)
+    )
+
     if tx_offset_mhz is None:
         return
+
+    tx_amplitude_q15 = resolve_tx_amplitude_q15(args)
 
     for channel in tx_channels:
         data.tx_offset_freq_by_channel[channel] = tx_offset_mhz
@@ -357,18 +341,22 @@ def on_connect(client, userdata, flags, rc):
         logging.info("Connected to MQTT broker")
         client.subscribe(MQTT_CMD_TOPIC)
 
-        # Republish retained status on every (re)connect so the broker always
-        # has an up-to-date retained message — survives broker restarts/recreates.
-        try:
-            send_status(data)
-        except Exception as e:
-            logging.error(f"Failed to publish status on connect: {e}")
+        # Only republish status if hardware is initialized — avoids publishing
+        # stale NaN values from CaptureData defaults before the overlay is ready.
+        if data.ol is not None:
+            try:
+                send_status(data)
+            except Exception as e:
+                logging.error(f"Failed to publish status on connect: {e}")
     else:
         logging.error(f"Failed to connect to MQTT broker, return code {rc}")
 
 
 def on_message(client, userdata, msg):
     global data
+    if data.ol is None:
+        logging.warning("Received MQTT command before overlay initialized; ignoring.")
+        return
     try:
         message = json.loads(msg.payload.decode())
         logging.debug(f"Received MQTT: {message}")
@@ -389,7 +377,7 @@ def on_message(client, userdata, msg):
             capture_next_pps(data)
             send_status(data)
         elif command == "set":
-            set_param, set_value = args.split(" ")
+            set_param, set_value = args.split(" ", 1)
             if set_param == "freq_metadata":
                 set_freq_metadata(set_value, data)
                 send_status(data)
@@ -478,12 +466,34 @@ def on_message(client, userdata, msg):
         elif command == "get":
             if args and args[0] == "tlm":
                 send_status(data)
+            elif isinstance(args, str) and args.startswith("pll_config"):
+                parts = args.split()
+                if len(parts) != 3:
+                    logging.warning("get pll_config requires: pll_config <adc|dac> <tile>")
+                else:
+                    _, converter_type, tile_str = parts
+                    try:
+                        result = data.ol.get_pll_config(converter_type, int(tile_str))
+                        data.mqtt_client.publish(
+                            f"{service_name}/pll_config",
+                            json.dumps(result),
+                            retain=False,
+                        )
+                    except Exception as e:
+                        logging.error(f"get pll_config failed: {e}")
+        elif command == "set_pps_publish_interval":
+            try:
+                data.pps_publish_interval_s = float(args)
+                logging.info(f"PPS publish interval set to {data.pps_publish_interval_s}s")
+                send_status(data)
+            except (ValueError, TypeError) as e:
+                logging.warning(f"Invalid pps_publish_interval value: {args} — {e}")
     except Exception as e:
         logging.error(f"Error processing MQTT message: {e}")
 
 
 def update_adc_nco(freq_mhz, data):
-    freq_mhz = float(freq_mhz)  # <=== THIS LINE FIXES IT
+    freq_mhz = float(freq_mhz)
     # metadata only supports tuning with kHz precision, so round to kHz for actual tune
     freq_mhz = round(freq_mhz, 3)
     freq_hz = freq_mhz * 1e6
@@ -614,21 +624,8 @@ def run(args):
     data.ol.configure_clock("internal" if args.internal_clock else "external")
 
     # Configure optional DAC0 TX tone. RX setup still proceeds normally.
+    # configure_tx owns all TX state in data; no re-seeding needed after this.
     configure_tx(args, data)
-
-    # Seed TX state from CLI args for MQTT status
-    data.tx_channels = resolve_tx_channels(args)
-    data.tx_center_freq = args.tx_center_freq
-    data.tx_offset_freq = (
-        TX_DEFAULT_OFFSET_FREQ_MHZ
-        if args.tx_offset_freq is None
-        else float(args.tx_offset_freq)
-    )
-    data.tx_amplitude_bins = (
-        TX_DEFAULT_AMPLITUDE_BINS
-        if args.tx_amplitude is None
-        else int(args.tx_amplitude)
-    )
 
     # Initialize all channels to make sure they're ready for later use
     data.channels = ALL_CHANNELS
@@ -639,6 +636,10 @@ def run(args):
     # Set active channels
     data.channels = args.channels
 
+    # Hardware is fully initialized — publish authoritative initial status.
+    # This overwrites any stale retained message from a previous run.
+    send_status(data)
+
     # Start Capture
     if not args.reset:
         if args.internal_clock:
@@ -647,6 +648,7 @@ def run(args):
             capture_next_pps(data)
 
     pps_count_last = 0
+    pps_last_publish = 0.0
     try:
         while not exit_flag:
             time.sleep(0.1)
@@ -659,7 +661,14 @@ def run(args):
             if pps > pps_count_last:
                 data.pps_count = pps
                 pps_count_last = pps
+                now = time.time()
+                if data.pps_publish_interval_s > 0 and now - pps_last_publish >= data.pps_publish_interval_s:
+                    send_status(data)
+                    pps_last_publish = now
     finally:
+        logging.info("Exiting and resetting channels.")
+        data.channels = ALL_CHANNELS
+        set_channel_ctrl(Ctrl.RESET, data)
         for channel in TX_CHANNEL_CONFIG:
             try:
                 configure_tx_function_generator(channel, None, None, data)
@@ -670,10 +679,6 @@ def run(args):
                     e,
                 )
         mqtt_client.loop_stop()
-
-    logging.info("Exiting and resetting channels.")
-    data.channels = ALL_CHANNELS
-    set_channel_ctrl(Ctrl.RESET, data)
 
 
 def main():
