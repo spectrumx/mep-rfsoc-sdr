@@ -1,5 +1,7 @@
 [Unit]
 Description=MEP RFSoC SDR service and MQTT listener
+After=network.target
+StartLimitIntervalSec=0
 
 [Service]
 Type=exec
