@@ -27,6 +27,13 @@ sudo `which python` -m build
 sudo `which python` -m pip install . -v
 ```
 
+Finally, link and enable the service so that it runs on boot:
+```bash
+sudo ln -sf `python -c 'import importlib.resources; print(importlib.resources.files("mep_rfsoc_sdr") / "systemd" / "mep-rfsoc-sdr.service")'` /etc/systemd/system/mep-rfsoc-sdr.service
+sudo systemctl daemon-reload
+sudo systemctl enable mep-rfsoc-sdr
+```
+
 The bitstream and hardware description files are not included in the repo by default. The build hook fetches the official files from the release page at: https://github.com/spectrumx/mep-rfsoc-sdr/releases into `dist/bitstream-v{version}` and includes those files in the installed package. To override the official files, manually place `sdr_bitstream.bit` and `sdr_bitstream.hwh` in `src/bitstream`, then rerun the build and install commands above. The build hook will copy those user-provided files into `dist/bitstream-v{version}` and include them in the installed package.
 
 ## Receiving Data
