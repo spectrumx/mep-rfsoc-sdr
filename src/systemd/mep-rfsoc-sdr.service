@@ -1,5 +1,7 @@
 [Unit]
 Description=MEP RFSoC SDR service and MQTT listener
+Wants=bootpy.service
+After=bootpy.service
 After=network.target
 StartLimitIntervalSec=0
 
