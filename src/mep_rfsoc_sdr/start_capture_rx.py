@@ -90,7 +90,9 @@ class CommandError(ValueError):
 
 @dataclass
 class CaptureData:
-    state: str = "inactive"
+    state: str = "starting"
+    state_ADC: str = "inactive"
+    state_DAC: str = "inactive"
     f_c_hz: float = 0.0
     f_if_hz: float = 0.0
     f_s: float = 0.0
@@ -132,9 +134,19 @@ def status_number(value):
     return 0.0 if value is None else value
 
 
+def update_state(data):
+    if data.state in ("starting", "error", "offline"):
+        return
+    data.state = "active" if (
+        data.state_ADC == "active" or data.state_DAC == "active"
+    ) else "ready"
+
+
 def status_payload(data):
     return {
         "state": data.state,
+        "state_ADC": data.state_ADC,
+        "state_DAC": data.state_DAC,
         "f_c_hz": status_number(data.f_c_hz),
         "f_if_hz": status_number(data.f_if_hz),
         "f_s": status_number(data.f_s),
@@ -368,6 +380,8 @@ def disable_all_tx(data):
     for channel in TX_CHANNEL_CONFIG:
         configure_tx_function_generator(channel, None, None, data)
     data.tx_enabled = False
+    data.state_DAC = "inactive"
+    update_state(data)
 
 
 def apply_tx_center_freq(channel, data):
@@ -414,6 +428,7 @@ def start_tx(data):
 
     except Exception:
         data.tx_enabled = False
+        data.state_DAC = "inactive"
         try:
             disable_all_tx(data)
         except Exception:
@@ -421,6 +436,8 @@ def start_tx(data):
         raise
 
     data.tx_enabled = True
+    data.state_DAC = "active"
+    update_state(data)
     logging.info("TX started on channels: %s", data.tx_channels)
 
 
@@ -522,7 +539,8 @@ def set_channel_ctrl(ctrl, data):
     for channel in data.channels:
         stream_for(channel, data).register_map.CTRL = ctrl.value
 
-    data.state = "active" if ctrl in (Ctrl.CAPTURE, Ctrl.CAPTURE_NEXT_PPS) else "inactive"
+    data.state_ADC = "active" if ctrl in (Ctrl.CAPTURE, Ctrl.CAPTURE_NEXT_PPS) else "inactive"
+    update_state(data)
 
 
 def hold_capture_in_reset(data):
@@ -531,7 +549,8 @@ def hold_capture_in_reset(data):
     except Exception:
         logging.exception("Failed to reset capture after retune failure")
 
-    # set_channel_ctrl() writes inactive, so the error state must be set last.
+    # set_channel_ctrl() writes state_ADC=inactive, so the service error state
+    # must be set last.
     data.state = "error"
 
 
@@ -795,7 +814,8 @@ def set_adc_if(value, data):
         return
 
     if data.state == "error":
-        data.state = "inactive"
+        data.state = "ready"
+    update_state(data)
 
     publish_status(data, "set freq_IF")
 
@@ -975,7 +995,11 @@ def setup_mqtt_client():
 def publish_starting(mqtt_client):
     mqtt_client.publish(
         MQTT_STATUS_TOPIC,
-        payload=json.dumps({"state": "starting"}),
+        payload=json.dumps({
+            "state": "starting",
+            "state_ADC": "inactive",
+            "state_DAC": "inactive",
+        }),
         qos=0,
         retain=True,
     )
@@ -987,6 +1011,8 @@ def publish_startup_error(mqtt_client, error):
         payload=json.dumps(
             {
                 "state": "error",
+                "state_ADC": data.state_ADC,
+                "state_DAC": data.state_DAC,
                 "phase": "startup",
                 "message": str(error),
                 "timestamp": time.time(),
@@ -1112,11 +1138,16 @@ def shutdown(mqtt_client, data):
                 disable_all_tx(data)
             except Exception:
                 logging.exception("Cleanup TX disable failed")
+        data.state = "offline"
 
     try:
         info = mqtt_client.publish(
             MQTT_STATUS_TOPIC,
-            payload=json.dumps({"state": "offline"}),
+            payload=json.dumps({
+                "state": "offline",
+                "state_ADC": data.state_ADC,
+                "state_DAC": data.state_DAC,
+            }),
             qos=0,
             retain=True,
         )
@@ -1150,6 +1181,8 @@ def run(args):
             initialize_hardware(args, data)
             data.channels = parse_capture_channels(args.channels)
             start_initial_capture(args, data)
+            data.state = "ready"
+            update_state(data)
             data.accept_commands = True
             send_status(data)
     except Exception as e:
