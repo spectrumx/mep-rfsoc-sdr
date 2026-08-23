@@ -91,8 +91,8 @@ class CommandError(ValueError):
 @dataclass
 class CaptureData:
     state: str = "starting"
-    state_ADC: str = "inactive"
-    state_DAC: str = "inactive"
+    state_RX: str = "inactive"
+    state_TX: str = "inactive"
     f_c_hz: float = 0.0
     f_if_hz: float = 0.0
     f_s: float = 0.0
@@ -138,15 +138,15 @@ def update_state(data):
     if data.state in ("starting", "error", "offline"):
         return
     data.state = "active" if (
-        data.state_ADC == "active" or data.state_DAC == "active"
+        data.state_RX == "active" or data.state_TX == "active"
     ) else "ready"
 
 
 def status_payload(data):
     return {
         "state": data.state,
-        "state_ADC": data.state_ADC,
-        "state_DAC": data.state_DAC,
+        "state_RX": data.state_RX,
+        "state_TX": data.state_TX,
         "f_c_hz": status_number(data.f_c_hz),
         "f_if_hz": status_number(data.f_if_hz),
         "f_s": status_number(data.f_s),
@@ -380,7 +380,7 @@ def disable_all_tx(data):
     for channel in TX_CHANNEL_CONFIG:
         configure_tx_function_generator(channel, None, None, data)
     data.tx_enabled = False
-    data.state_DAC = "inactive"
+    data.state_TX = "inactive"
     update_state(data)
 
 
@@ -428,7 +428,7 @@ def start_tx(data):
 
     except Exception:
         data.tx_enabled = False
-        data.state_DAC = "inactive"
+        data.state_TX = "inactive"
         try:
             disable_all_tx(data)
         except Exception:
@@ -436,7 +436,7 @@ def start_tx(data):
         raise
 
     data.tx_enabled = True
-    data.state_DAC = "active"
+    data.state_TX = "active"
     update_state(data)
     logging.info("TX started on channels: %s", data.tx_channels)
 
@@ -539,7 +539,7 @@ def set_channel_ctrl(ctrl, data):
     for channel in data.channels:
         stream_for(channel, data).register_map.CTRL = ctrl.value
 
-    data.state_ADC = "active" if ctrl in (Ctrl.CAPTURE, Ctrl.CAPTURE_NEXT_PPS) else "inactive"
+    data.state_RX = "active" if ctrl in (Ctrl.CAPTURE, Ctrl.CAPTURE_NEXT_PPS) else "inactive"
     update_state(data)
 
 
@@ -549,7 +549,7 @@ def hold_capture_in_reset(data):
     except Exception:
         logging.exception("Failed to reset capture after retune failure")
 
-    # set_channel_ctrl() writes state_ADC=inactive, so the service error state
+    # set_channel_ctrl() writes state_RX=inactive, so the service error state
     # must be set last.
     data.state = "error"
 
@@ -995,24 +995,19 @@ def setup_mqtt_client():
 def publish_starting(mqtt_client):
     mqtt_client.publish(
         MQTT_STATUS_TOPIC,
-        payload=json.dumps({
-            "state": "starting",
-            "state_ADC": "inactive",
-            "state_DAC": "inactive",
-        }),
+        payload=json.dumps(status_payload(data), allow_nan=False),
         qos=0,
         retain=True,
     )
 
 
 def publish_startup_error(mqtt_client, error):
+    data.state = "error"
     info = mqtt_client.publish(
         MQTT_STATUS_TOPIC,
         payload=json.dumps(
             {
-                "state": "error",
-                "state_ADC": data.state_ADC,
-                "state_DAC": data.state_DAC,
+                **status_payload(data),
                 "phase": "startup",
                 "message": str(error),
                 "timestamp": time.time(),
@@ -1143,11 +1138,7 @@ def shutdown(mqtt_client, data):
     try:
         info = mqtt_client.publish(
             MQTT_STATUS_TOPIC,
-            payload=json.dumps({
-                "state": "offline",
-                "state_ADC": data.state_ADC,
-                "state_DAC": data.state_DAC,
-            }),
+            payload=json.dumps(status_payload(data), allow_nan=False),
             qos=0,
             retain=True,
         )
