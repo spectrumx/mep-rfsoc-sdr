@@ -520,10 +520,15 @@ def write_frequency_metadata(f_c_hz, data, channels=ALL_CHANNELS):
 
 def update_adc_nco(freq_mhz, data):
     freq_mhz = round(float(freq_mhz), 3)
+    if freq_mhz < 0:
+        raise ValueError("RX center frequency must be non-negative")
     freq_hz = freq_mhz * 1e6
 
+    # Pass the physical RF center frequency. SDROverlay selects the RFDC NCO
+    # sign from Nyquist-zone parity so the complex I/Q spectrum keeps the same
+    # frequency orientation on both sides of a Nyquist-zone boundary.
     for tile, block in ((0, 0), (0, 1), (2, 0), (2, 1)):
-        data.ol.set_adc_nco(-freq_mhz, ADC_SAMPLE_FREQUENCY_MHZ, tile, block)
+        data.ol.set_adc_nco(freq_mhz, ADC_SAMPLE_FREQUENCY_MHZ, tile, block)
 
     # Stream metadata is written to every RX stream so later channel changes do
     # not expose stale frequency or sample-rate metadata.

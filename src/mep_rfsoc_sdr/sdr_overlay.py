@@ -45,18 +45,39 @@ class SDROverlay(Overlay):
         else:
             raise ValueError(f"Unknown clock_source: {clock_source!r}. Expected 'internal' or 'external'.")
 
-    def set_adc_nco(self, f_c_mhz, f_s_mhz, tile, block):
-        """Set the ADC NCO frequency"""
-        # Convert to floats
-        f_c_mhz = float(f_c_mhz)
+    def set_adc_nco(self, rf_freq_mhz, f_s_mhz, tile, block):
+        """Configure an RF-ADC fine mixer to down-convert ``rf_freq_mhz`` to DC.
+
+        The ADC produces a real RF sample stream and the RFDC fine mixer converts
+        it to complex I/Q (R2C). Adjacent RF Nyquist zones alternate spectral
+        orientation, so the NCO sign must alternate too if increasing RF
+        frequency is to remain increasing complex-baseband frequency:
+
+            odd Nyquist zone  -> negative NCO
+            even Nyquist zone -> positive NCO
+
+        The RFDC API accepts the RF-frequency value directly and folds it to the
+        equivalent digital NCO frequency internally.
+        """
+        rf_freq_mhz = float(rf_freq_mhz)
         f_s_mhz = float(f_s_mhz)
+        if rf_freq_mhz < 0:
+            raise ValueError("ADC RF center frequency must be non-negative")
+
         pll_freq = self.LMX_FREQ_MHZ  # LMX output = tile PLL reference
+        nyquist_zone = self._nyquist_zone(rf_freq_mhz, f_s_mhz)
+
+        # Preserve RF spectral orientation through the real-to-complex DDC.
+        # Example at Fs=1024 MSPS:
+        #   1700 MHz is physical zone 4 (even) -> +1700 MHz NCO
+        #   2200 MHz is physical zone 5 (odd)  -> -2200 MHz NCO
+        nco_freq_mhz = rf_freq_mhz if nyquist_zone == 2 else -rf_freq_mhz
 
         mixer = {
             "CoarseMixFreq": xrfdc.COARSE_MIX_BYPASS,
             "EventSource": xrfdc.EVNT_SRC_TILE,
             "FineMixerScale": xrfdc.MIXER_SCALE_1P0,
-            "Freq": f_c_mhz,
+            "Freq": nco_freq_mhz,
             "MixerMode": xrfdc.MIXER_MODE_R2C,
             "MixerType": xrfdc.MIXER_TYPE_FINE,
             "PhaseOffset": 0.0,
@@ -68,7 +89,7 @@ class SDROverlay(Overlay):
         # XRFDC_EXTERNAL_CLK = 0x0, bypasses the PLL and uses the incoming
         # clock directly as the sample clock.
         adc_tile.DynamicPLLConfig(1, pll_freq, f_s_mhz)
-        adc_tile.blocks[block].NyquistZone = self._nyquist_zone(f_c_mhz, f_s_mhz)
+        adc_tile.blocks[block].NyquistZone = nyquist_zone
         adc_tile.blocks[block].MixerSettings = mixer
         adc_tile.blocks[block].UpdateEvent(xrfdc.EVENT_MIXER)
         adc_tile.SetupFIFO(True)
